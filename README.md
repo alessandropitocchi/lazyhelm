@@ -109,4 +109,6 @@ go build -o lazyhelm ./cmd/lazyhelm
 
 ## License
 
-MIT
+Licensed under the Apache License, Version 2.0 - see the [LICENSE](LICENSE) file for details.
+
+Copyright 2025 Alessandro Pitocchi
