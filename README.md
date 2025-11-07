@@ -21,9 +21,11 @@ Browse Helm repos, explore chart versions, view and edit values files, and compa
 
 ### Via Go
 
+<!--
 ```bash
 go install github.com/alessandropitocchi/lazyhelm/cmd/lazyhelm@latest
 ```
+-->
 
 Make sure `$HOME/go/bin` is in your PATH:
 ```bash
