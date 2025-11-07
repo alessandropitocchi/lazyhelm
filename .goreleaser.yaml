@@ -96,6 +96,7 @@ brews:
     license: "MIT"
     skip_upload: auto
     test: |
-      system "#{bin}/lazyhelm --version"
+      output = shell_output("#{bin}/lazyhelm --version")
+      assert_match "lazyhelm version", output
     install: |
       bin.install "lazyhelm"

@@ -23,6 +23,13 @@ import (
 )
 
 var (
+	// Set via ldflags during build
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
+var (
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("111")). // Azzurro chiaro
 			Bold(true).
@@ -1757,6 +1764,28 @@ func openEditorCmd(content string) tea.Cmd {
 }
 
 func main() {
+	// Check for version flag
+	if len(os.Args) > 1 {
+		arg := os.Args[1]
+		if arg == "--version" || arg == "-v" || arg == "version" {
+			fmt.Printf("lazyhelm version %s\n", version)
+			fmt.Printf("commit: %s\n", commit)
+			fmt.Printf("built: %s\n", date)
+			os.Exit(0)
+		}
+		if arg == "--help" || arg == "-h" || arg == "help" {
+			fmt.Println("LazyHelm - A fast, intuitive Terminal User Interface (TUI) for managing Helm charts")
+			fmt.Println()
+			fmt.Println("Usage:")
+			fmt.Println("  lazyhelm           Start the TUI")
+			fmt.Println("  lazyhelm --version Show version information")
+			fmt.Println("  lazyhelm --help    Show this help message")
+			fmt.Println()
+			fmt.Println("For more information, visit: https://github.com/alessandropitocchi/lazyhelm")
+			os.Exit(0)
+		}
+	}
+
 	p := tea.NewProgram(
 		initialModel(),
 		tea.WithAltScreen(),

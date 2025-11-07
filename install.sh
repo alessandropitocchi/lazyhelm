@@ -69,24 +69,52 @@ if [ -z "$LATEST_RELEASE" ]; then
 else
     echo "Latest release: $LATEST_RELEASE"
 
-    # Download binary
-    DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_RELEASE/${BINARY_NAME}_${OS}_${ARCH}"
-    TEMP_FILE=$(mktemp)
+    # Determine the correct OS name for the archive (GoReleaser uses title case)
+    case $OS in
+        darwin)
+            OS_TITLE="Darwin"
+            ;;
+        linux)
+            OS_TITLE="Linux"
+            ;;
+        *)
+            OS_TITLE="$OS"
+            ;;
+    esac
 
-    echo "Downloading..."
-    if curl -fsSL "$DOWNLOAD_URL" -o "$TEMP_FILE"; then
-        chmod +x "$TEMP_FILE"
+    # Determine the correct architecture name for the archive
+    case $ARCH in
+        amd64)
+            ARCH_TITLE="x86_64"
+            ;;
+        *)
+            ARCH_TITLE="$ARCH"
+            ;;
+    esac
+
+    # Download archive
+    ARCHIVE_NAME="${BINARY_NAME}_${OS_TITLE}_${ARCH_TITLE}.tar.gz"
+    DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_RELEASE/$ARCHIVE_NAME"
+    TEMP_DIR=$(mktemp -d)
+
+    echo "Downloading $ARCHIVE_NAME..."
+    if curl -fsSL "$DOWNLOAD_URL" -o "$TEMP_DIR/$ARCHIVE_NAME"; then
+        echo "Extracting..."
+        tar -xzf "$TEMP_DIR/$ARCHIVE_NAME" -C "$TEMP_DIR"
 
         # Install binary
         if [ -w "$INSTALL_DIR" ]; then
-            mv "$TEMP_FILE" "$INSTALL_DIR/$BINARY_NAME"
+            mv "$TEMP_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
         else
             echo "Installing to $INSTALL_DIR (requires sudo)..."
-            sudo mv "$TEMP_FILE" "$INSTALL_DIR/$BINARY_NAME"
+            sudo mv "$TEMP_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
         fi
+
+        # Cleanup
+        rm -rf "$TEMP_DIR"
     else
         echo -e "${RED}Failed to download binary. Trying from source...${NC}"
-        rm "$TEMP_FILE"
+        rm -rf "$TEMP_DIR"
 
         # Fallback to source installation
         if ! command -v go &> /dev/null; then
@@ -96,6 +124,9 @@ else
 
         go install "github.com/$REPO/cmd/lazyhelm@latest"
         echo -e "${GREEN}Installed via 'go install'${NC}"
+        echo -e "${YELLOW}Note: Make sure $HOME/go/bin is in your PATH${NC}"
+        echo -e "${YELLOW}Add this to your ~/.zshrc or ~/.bashrc:${NC}"
+        echo -e "${YELLOW}  export PATH=\$PATH:\$HOME/go/bin${NC}"
         exit 0
     fi
 fi
