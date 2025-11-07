@@ -81,22 +81,24 @@ release:
     ### Manual
     Download the appropriate binary for your platform from the assets below.
 
-brews:
-  - name: lazyhelm
-    repository:
-      owner: alessandropitocchi
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    commit_author:
-      name: goreleaserbot
-      email: bot@goreleaser.com
-    folder: Formula
-    homepage: "https://github.com/alessandropitocchi/lazyhelm"
-    description: "A fast, intuitive Terminal User Interface (TUI) for managing Helm charts"
-    license: "MIT"
-    skip_upload: auto
-    test: |
-      output = shell_output("#{bin}/lazyhelm --version")
-      assert_match "lazyhelm version", output
-    install: |
-      bin.install "lazyhelm"
+# Homebrew tap disabled until HOMEBREW_TAP_GITHUB_TOKEN is configured
+# To enable: create a GitHub personal access token with repo scope and add it as a secret
+# brews:
+#   - name: lazyhelm
+#     repository:
+#       owner: alessandropitocchi
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     commit_author:
+#       name: goreleaserbot
+#       email: bot@goreleaser.com
+#     folder: Formula
+#     homepage: "https://github.com/alessandropitocchi/lazyhelm"
+#     description: "A fast, intuitive Terminal User Interface (TUI) for managing Helm charts"
+#     license: "MIT"
+#     skip_upload: auto
+#     test: |
+#       output = shell_output("#{bin}/lazyhelm --version")
+#       assert_match "lazyhelm version", output
+#     install: |
+#       bin.install "lazyhelm"
