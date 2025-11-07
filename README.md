@@ -19,11 +19,12 @@ LazyHelm brings the speed and elegance of lazygit/lazydocker to Helm chart manag
 
 ## 📦 Installation
 
-### Using Go Install (Recommended)
+<!-- ### Using Go Install (Recommended)
 
 ```bash
 go install github.com/alessandropitocchi/lazyhelm/cmd/lazyhelm@latest
 ```
+-->
 
 ### Using Install Script
 
