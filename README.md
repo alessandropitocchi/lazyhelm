@@ -1,47 +1,42 @@
-# LazyHelm 🚀
+# LazyHelm
 
-> A fast, intuitive Terminal User Interface (TUI) for managing Helm charts
+A terminal UI for browsing and managing Helm charts. Inspired by lazygit and lazydocker.
 
-LazyHelm brings the speed and elegance of lazygit/lazydocker to Helm chart management. Browse repositories, explore charts, compare versions, and edit values—all without leaving your terminal.
+## What it does
 
-## ✨ Features
+Browse Helm repos, explore chart versions, view and edit values files, and compare versions - all in your terminal. No need to remember helm commands or manually fetch values.
 
-- 🔍 **Interactive browsing** of Helm repositories, charts, and versions
-- 🎨 **Syntax highlighting** for YAML values
-- 📝 **External editor integration** (nvim/vim/vi with full config)
-- 🔄 **Version comparison** with inline diff viewer
-- 🔎 **Fuzzy search** across repos, charts, versions, and values
-- 📋 **YAML path copying** for quick reference
-- 💾 **Export values** to custom files with validation
-- 🎯 **Template generation** for previewing deployments
-- ⚡ **Smart caching** for fast navigation
-- 🎭 **Diff viewer** to compare values between versions
+## Features
 
-## 📦 Installation
+- Interactive browsing of Helm repositories and charts
+- Syntax-highlighted YAML viewing
+- Edit values in your preferred editor (nvim/vim/vi/etc)
+- Compare values between versions with diff view
+- Fuzzy search everywhere
+- Copy YAML paths to clipboard
+- Export values to files
+- Template generation preview
 
-<!-- ### Using Go Install (Recommended)
+## Installation
+
+### Via Go
 
 ```bash
 go install github.com/alessandropitocchi/lazyhelm/cmd/lazyhelm@latest
 ```
--->
 
-### Using Install Script
+Make sure `$HOME/go/bin` is in your PATH:
+```bash
+export PATH=$PATH:$HOME/go/bin
+```
+
+### Install script
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/alessandropitocchi/lazyhelm/main/install.sh | bash
 ```
 
-### Manual Installation
-
-```bash
-git clone https://github.com/alessandropitocchi/lazyhelm.git
-cd lazyhelm
-go build -o lazyhelm ./cmd/lazyhelm
-sudo mv lazyhelm /usr/local/bin/
-```
-
-### From Source
+### From source
 
 ```bash
 git clone https://github.com/alessandropitocchi/lazyhelm.git
@@ -49,166 +44,69 @@ cd lazyhelm
 make install
 ```
 
-## 🚀 Quick Start
+## Usage
 
+Just run:
 ```bash
-# Launch LazyHelm
-lazyhelm
-
-# Set your preferred editor (optional)
-export EDITOR=nvim
 lazyhelm
 ```
 
-## ⌨️ Keybindings
+Set your editor if you want (defaults to nvim → vim → vi):
+```bash
+export EDITOR=nvim
+```
+
+## Keybindings
 
 ### Navigation
-| Key | Action |
-|-----|--------|
-| `↑/k`, `↓/j` | Move up/down |
-| `←/h`, `→/l` | Scroll left/right (in values view) |
-| `enter` | Select item / Go deeper |
-| `esc` | Go back / Cancel |
-| `q` | Quit |
+- `↑/k`, `↓/j` - Move up/down
+- `←/h`, `→/l` - Scroll horizontally (values view)
+- `enter` - Select / Go deeper
+- `esc` - Go back
+- `q` - Quit
 
 ### Actions
-| Key | Action |
-|-----|--------|
-| `/` | Fuzzy search in current view |
-| `n` / `N` | Next/Previous search result |
-| `a` | Add repository |
-| `e` | Edit values in external editor |
-| `w` | Write/export values to file |
-| `t` | Generate Helm template |
-| `v` | View versions (in chart list) |
-| `y` | Copy YAML path to clipboard |
-| `d` | Diff two versions |
-| `?` | Show help |
+- `/` - Fuzzy search
+- `n` / `N` - Next/Previous search result
+- `a` - Add repository
+- `e` - Edit values in external editor
+- `w` - Export values to file
+- `t` - Generate Helm template
+- `v` - View versions
+- `y` - Copy YAML path
+- `d` - Diff two versions
+- `?` - Help
 
-## 🎯 Usage Examples
+## How it works
 
-### Browse and Edit Values
+Uses the Helm SDK to interact with chart repos and the [Bubbletea](https://github.com/charmbracelet/bubbletea) framework for the TUI.
 
-1. Launch `lazyhelm`
-2. Navigate to a repository (e.g., `bitnami`)
-3. Select a chart (e.g., `postgresql`)
-4. Choose a version
-5. Press `e` to edit in your editor
-6. Make changes, save (`:wq`)
-7. Specify output path for the custom values
+Reads from your existing Helm config (`~/.config/helm/repositories.yaml`) and caches data locally for faster browsing.
 
-### Compare Versions
+## Requirements
 
-1. Navigate to chart detail view
-2. Press `d` on the first version
-3. Press `enter` on the second version
-4. View the diff with changes highlighted
+- Helm 3.x installed
+- Go 1.21+ (if building from source)
+- Terminal with ANSI color support
 
-### Export Values
-
-1. Navigate to any chart version
-2. Press `w` (write/export)
-3. Enter the output path (e.g., `./my-values.yaml`)
-
-### Search
-
-- Press `/` in any list to start fuzzy search
-- Type to filter (e.g., "pg" matches "postgresql")
-- Press `esc` to clear and show all items
-
-## 🎨 Editor Integration
-
-LazyHelm respects your editor preferences:
+## Development
 
 ```bash
-# Set your preferred editor
-export EDITOR=nvim        # Neovim
-export EDITOR=vim         # Vim
-export EDITOR="code --wait"  # VS Code
-export EDITOR=nano        # Nano
-
-# If not set, LazyHelm will auto-detect (nvim → vim → vi)
-```
-
-The editor opens with:
-- Full syntax highlighting for YAML
-- Your complete configuration and plugins
-- Line numbers and all editor features
-
-## 🔧 Configuration
-
-LazyHelm uses Helm's standard configuration:
-- Repositories: `~/.config/helm/repositories.yaml`
-- Cache: Uses Helm's cache directory
-
-### Requirements
-
-- Go 1.21+ (for building from source)
-- Helm 3.x installed and configured
-- A terminal that supports ANSI colors
-
-## 📚 How It Works
-
-LazyHelm is built with:
-- [Bubbletea](https://github.com/charmbracelet/bubbletea) - The Elm Architecture for Go
-- [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
-- [Lipgloss](https://github.com/charmbracelet/lipgloss) - Style definitions
-- Helm v3 SDK - Chart operations
-
-## 🤝 Contributing
-
-Contributions are welcome! Here's how you can help:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development
-
-```bash
-# Clone the repository
 git clone https://github.com/alessandropitocchi/lazyhelm.git
 cd lazyhelm
-
-# Install dependencies
 go mod download
-
-# Build
 go build -o lazyhelm ./cmd/lazyhelm
-
-# Run
 ./lazyhelm
-
-# Run tests
-go test ./...
 ```
 
-## 📝 Roadmap
+## TODO
 
-- [ ] Helm operations (install, upgrade, uninstall)
-- [ ] Live Kubernetes integration (deployed releases)
-- [ ] Repository management (update, remove)
-- [ ] Configuration file support
-- [ ] Favorites/bookmarks
-- [ ] Multi-cluster support
+- Helm operations (install/upgrade/uninstall)
+- Show deployed releases from K8s
+- Repo management (update/remove)
+- Config file
+- Bookmarks
 
-## 📄 License
+## License
 
-MIT License - see [LICENSE](LICENSE) file for details
-
-## 🙏 Acknowledgments
-
-- Inspired by [lazygit](https://github.com/jesseduffield/lazygit) and [lazydocker](https://github.com/jesseduffield/lazydocker)
-- Built with [Charm](https://charm.sh/) TUI tools
-- Helm community for the amazing package manager
-
-## 📮 Contact
-
-- GitHub Issues: [Report a bug](https://github.com/alessandropitocchi/lazyhelm/issues)
-- Pull Requests: [Contribute](https://github.com/alessandropitocchi/lazyhelm/pulls)
-
----
-
-Made with ❤️ for the Kubernetes community
+MIT
