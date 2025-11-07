@@ -1,0 +1,101 @@
+project_name: lazyhelm
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: lazyhelm
+    main: ./cmd/lazyhelm
+    binary: lazyhelm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: lazyhelm
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+
+release:
+  github:
+    owner: alessandropitocchi
+    name: lazyhelm
+  draft: false
+  prerelease: auto
+  name_template: "{{.ProjectName}} v{{.Version}}"
+  footer: |
+    ## Installation
+
+    ### Using Go
+    ```bash
+    go install github.com/alessandropitocchi/lazyhelm/cmd/lazyhelm@{{.Tag}}
+    ```
+
+    ### Using install script
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/alessandropitocchi/lazyhelm/main/install.sh | bash
+    ```
+
+    ### Manual
+    Download the appropriate binary for your platform from the assets below.
+
+brews:
+  - name: lazyhelm
+    repository:
+      owner: alessandropitocchi
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    folder: Formula
+    homepage: "https://github.com/alessandropitocchi/lazyhelm"
+    description: "A fast, intuitive Terminal User Interface (TUI) for managing Helm charts"
+    license: "MIT"
+    skip_upload: auto
+    test: |
+      system "#{bin}/lazyhelm --version"
+    install: |
+      bin.install "lazyhelm"
