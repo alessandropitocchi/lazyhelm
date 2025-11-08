@@ -627,6 +627,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chartList.SetSize(w/2, h)
 		m.versionList.SetSize(w/3, h)
 
+		// Artifact Hub lists
+		m.ahPackageList.SetSize(w-4, h)
+		m.ahVersionList.SetSize(w/3, h)
+
 		// Values view takes full screen
 		m.valuesView.Width = msg.Width - 6  // Full width minus border padding
 		m.valuesView.Height = msg.Height - 8 // Full height minus header/footer
