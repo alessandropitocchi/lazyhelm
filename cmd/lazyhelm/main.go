@@ -45,8 +45,10 @@ var (
 )
 
 var (
+	// Stile fzf-like con sfondi per massima leggibilità
 	titleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("33")). // Blu medio - funziona su chiaro e scuro
+			Foreground(lipgloss.Color("0")).   // Nero/Bianco (adaptive)
+			Background(lipgloss.Color("105")). // Purple medio
 			Bold(true).
 			Padding(0, 1)
 
@@ -57,59 +59,65 @@ var (
 
 	activePanelStyle = lipgloss.NewStyle().
 				Border(lipgloss.DoubleBorder()).
-				BorderForeground(lipgloss.Color("33")). // Blu medio invece di bianco
+				BorderForeground(lipgloss.Color("141")). // Violet chiaro
 				Padding(1, 2)
 
 	breadcrumbStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("33")). // Blu medio
+			Foreground(lipgloss.Color("0")).   // Nero/Bianco
+			Background(lipgloss.Color("73")).  // Cyan/Teal
 			Bold(true).
 			Padding(0, 1)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("231")). // Bianco
-			Background(lipgloss.Color("28")).  // Sfondo verde
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("120")). // Verde chiaro
 			Bold(true).
 			Padding(0, 2)
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("231")). // Bianco
-			Background(lipgloss.Color("196")). // Sfondo rosso brillante
+			Background(lipgloss.Color("196")). // Rosso brillante
 			Bold(true).
 			Padding(0, 2)
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")) // Grigio medio - funziona su chiaro e scuro
+			Foreground(lipgloss.Color("244")) // Grigio medio
 
 	addedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("28")). // Verde scuro/medio
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("120")). // Verde chiaro
 			Bold(true)
 
 	removedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("160")). // Rosso medio
+			Foreground(lipgloss.Color("231")). // Bianco
+			Background(lipgloss.Color("160")). // Rosso medio
 			Bold(true)
 
 	modifiedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("136")). // Giallo/arancio scuro - meglio su chiaro
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("228")). // Giallo chiaro
 			Bold(true)
 
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("33")). // Blu medio
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("141")). // Violet
 			Bold(true).
 			Padding(0, 2)
 
 	pathStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("0")).   // Nero su chiaro, chiaro su scuro (invertito automaticamente)
-			Background(lipgloss.Color("226")). // Giallo brillante
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("228")). // Giallo chiaro
 			Bold(true).
 			Padding(0, 2)
 
 	highlightStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("226")). // Giallo brillante
+			Background(lipgloss.Color("228")). // Giallo chiaro
 			Foreground(lipgloss.Color("0")).   // Nero
 			Bold(true)
 
 	searchInputStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("33")). // Blu medio
+				Foreground(lipgloss.Color("0")).   // Nero
+				Background(lipgloss.Color("141")). // Violet
 				Padding(0, 1).
 				Bold(true)
 )
@@ -546,18 +554,19 @@ func initialModel() model {
 		}
 	}
 
-	// Create custom delegate with better colors for both light and dark backgrounds
+	// Create custom delegate with fzf-like colors (background for selected items)
 	delegate := list.NewDefaultDelegate()
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(lipgloss.Color("33")).   // Blu medio
-		Bold(true).
-		Underline(true)
+		Foreground(lipgloss.Color("0")).    // Nero/Bianco (adaptive)
+		Background(lipgloss.Color("141")).  // Violet - stile fzf
+		Bold(true)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(lipgloss.Color("240"))   // Grigio medio
+		Foreground(lipgloss.Color("0")).    // Nero/Bianco
+		Background(lipgloss.Color("141"))   // Violet
 	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.
 		Foreground(lipgloss.AdaptiveColor{Light: "235", Dark: "255"})   // Grigio scuro su chiaro, bianco su scuro
 	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.
-		Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "250"})   // Grigio medio su chiaro, chiaro su scuro
+		Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "250"})   // Grigio medio
 
 	repoList := list.New(repoItems, delegate, 0, 0)
 	repoList.Title = "Repositories"
@@ -565,7 +574,7 @@ func initialModel() model {
 	repoList.SetFilteringEnabled(true)
 	repoList.Styles.Title = titleStyle
 	repoList.Styles.FilterPrompt = searchInputStyle
-	repoList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	repoList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	chartDelegate := list.NewDefaultDelegate()
 	chartDelegate.Styles = delegate.Styles
@@ -575,7 +584,7 @@ func initialModel() model {
 	chartList.SetFilteringEnabled(true)
 	chartList.Styles.Title = titleStyle
 	chartList.Styles.FilterPrompt = searchInputStyle
-	chartList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	chartList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	versionDelegate := list.NewDefaultDelegate()
 	versionDelegate.Styles = delegate.Styles
@@ -585,7 +594,7 @@ func initialModel() model {
 	versionList.SetFilteringEnabled(true)
 	versionList.Styles.Title = titleStyle
 	versionList.Styles.FilterPrompt = searchInputStyle
-	versionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	versionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	valuesView := viewport.New(0, 0)
 	diffView := viewport.New(0, 0)
@@ -604,7 +613,7 @@ func initialModel() model {
 	ahPackageList.SetFilteringEnabled(true)
 	ahPackageList.Styles.Title = titleStyle
 	ahPackageList.Styles.FilterPrompt = searchInputStyle
-	ahPackageList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	ahPackageList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	ahVersionDelegate := list.NewDefaultDelegate()
 	ahVersionDelegate.Styles = delegate.Styles
@@ -614,7 +623,7 @@ func initialModel() model {
 	ahVersionList.SetFilteringEnabled(true)
 	ahVersionList.Styles.Title = titleStyle
 	ahVersionList.Styles.FilterPrompt = searchInputStyle
-	ahVersionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	ahVersionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	return model{
 		helmClient:        client,
@@ -1791,7 +1800,7 @@ func (m *model) updateValuesViewWithSearch() {
 
 		// Add continuation indicator if line continues
 		if hasMore {
-			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
+			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
 			highlighted += arrowStyle.Render(" →")
 		}
 
@@ -2241,7 +2250,7 @@ func (m model) renderArtifactHubPackageDetail() string {
 	info := lipgloss.NewStyle().
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("33")).
+		BorderForeground(lipgloss.Color("141")).
 		Width(m.termWidth - 8).
 		Render(fmt.Sprintf(
 			"%s %s\n\n"+
