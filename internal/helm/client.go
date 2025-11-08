@@ -183,12 +183,21 @@ func (c *Client) AddRepository(name, url string) error {
 	if err != nil {
 		return fmt.Errorf("helm repo add failed: %w\nOutput: %s", err, string(output))
 	}
-	
+
 	// Update repo dopo l'aggiunta
 	cmd = exec.Command("helm", "repo", "update", name)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("helm repo update failed: %w", err)
 	}
-	
+
+	return nil
+}
+
+func (c *Client) RemoveRepository(name string) error {
+	cmd := exec.Command("helm", "repo", "remove", name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("helm repo remove failed: %w\nOutput: %s", err, string(output))
+	}
 	return nil
 }
