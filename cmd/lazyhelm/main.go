@@ -138,6 +138,7 @@ const (
 	templateValuesMode
 	exportValuesMode
 	saveEditMode
+	confirmRemoveRepoMode
 )
 
 type model struct {
@@ -234,6 +235,7 @@ type keyMap struct {
 	Diff        key.Binding
 	Edit        key.Binding
 	ArtifactHub key.Binding
+	RemoveRepo  key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -325,6 +327,10 @@ var defaultKeys = keyMap{
 	ArtifactHub: key.NewBinding(
 		key.WithKeys("s"),
 		key.WithHelp("s", "search artifact hub"),
+	),
+	RemoveRepo: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "remove repository"),
 	),
 }
 
@@ -686,6 +692,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchInput.Reset()
 				m.searchInput.Placeholder = fmt.Sprintf("Repository name (default: %s)...", m.ahSelectedPackage.Repository.Name)
 				m.searchInput.Focus()
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.RemoveRepo):
+			if m.state == stateRepoList && len(m.repos) > 0 {
+				// Enter confirmation mode
+				m.mode = confirmRemoveRepoMode
+				idx := m.repoList.Index()
+				if idx < len(m.repos) {
+					m.searchInput.Reset()
+					m.searchInput.Placeholder = fmt.Sprintf("Remove '%s'? (y/n)", m.repos[idx].Name)
+					m.searchInput.Focus()
+				}
 			}
 			return m, nil
 
@@ -1174,6 +1193,14 @@ func (m model) handleSearch() (tea.Model, tea.Cmd) {
 		m.searchInput.Placeholder = "Search..."
 		m.searchInput.Focus()
 	}
+	if m.state == stateArtifactHubSearch {
+		// Allow searching again in Artifact Hub
+		m.successMsg = ""
+		m.mode = searchMode
+		m.searchInput.Reset()
+		m.searchInput.Placeholder = "Search Artifact Hub..."
+		m.searchInput.Focus()
+	}
 	return m, nil
 }
 
@@ -1375,6 +1402,34 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.successMsg = fmt.Sprintf("✓ Values saved to %s", path)
 			}
 			m.editedContent = "" // Clear edited content
+			return m, nil
+
+		case confirmRemoveRepoMode:
+			response := strings.ToLower(m.searchInput.Value())
+			m.mode = normalMode
+			m.searchInput.Blur()
+
+			if response == "y" || response == "yes" {
+				// Remove the repository
+				idx := m.repoList.Index()
+				if idx < len(m.repos) {
+					repoName := m.repos[idx].Name
+					return m, func() tea.Msg {
+						err := m.helmClient.RemoveRepository(repoName)
+						if err != nil {
+							return operationDoneMsg{err: err}
+						}
+
+						// Reload repositories
+						repos, repoErr := m.helmClient.ListRepositories()
+						if repoErr != nil {
+							return operationDoneMsg{success: fmt.Sprintf("Repository '%s' removed, but failed to reload list", repoName)}
+						}
+
+						return reposReloadedMsg{repos: repos}
+					}
+				}
+			}
 			return m, nil
 		}
 		return m, nil
