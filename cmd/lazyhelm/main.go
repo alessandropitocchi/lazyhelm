@@ -125,6 +125,7 @@ const (
 	stateHelp
 	stateArtifactHubSearch
 	stateArtifactHubPackageDetail
+	stateArtifactHubVersions
 )
 
 type inputMode int
@@ -677,6 +678,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchInput.Placeholder = "Repository name..."
 				m.searchInput.Focus()
 			}
+			if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
+				// Add repo from Artifact Hub - only ask for name, URL is auto-filled
+				m.mode = addRepoMode
+				m.addRepoStep = 0
+				m.newRepoURL = m.ahSelectedPackage.Repository.URL // Pre-fill URL
+				m.searchInput.Reset()
+				m.searchInput.Placeholder = fmt.Sprintf("Repository name (default: %s)...", m.ahSelectedPackage.Repository.Name)
+				m.searchInput.Focus()
+			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Export):
@@ -715,6 +725,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if idx < len(m.charts) {
 					return m, loadVersions(m.helmClient, m.versionCache, m.charts[idx].Name)
 				}
+			}
+			if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
+				m.state = stateArtifactHubVersions
 			}
 			return m, nil
 
@@ -1005,6 +1018,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateArtifactHubPackageDetail:
 		m.ahVersionList, cmd = m.ahVersionList.Update(msg)
 		cmds = append(cmds, cmd)
+	case stateArtifactHubVersions:
+		m.ahVersionList, cmd = m.ahVersionList.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1045,6 +1061,8 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.state = stateArtifactHubSearch
 		m.ahSelectedPackage = nil
 		m.ahVersionList.SetItems([]list.Item{})
+	case stateArtifactHubVersions:
+		m.state = stateArtifactHubPackageDetail
 	}
 	return m, nil
 }
@@ -1139,13 +1157,28 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, loadArtifactHubPackage(m.artifactHubClient, pkg.Repository.Name, pkg.Name)
 		}
 
-	case stateArtifactHubPackageDetail:
-		// On enter in package detail, offer to add repository
-		if m.ahSelectedPackage != nil {
-			repoName := m.ahSelectedPackage.Repository.Name
-			repoURL := m.ahSelectedPackage.Repository.URL
-			m.successMsg = fmt.Sprintf("Adding repository '%s'...", repoName)
-			return m, addRepository(m.helmClient, repoName, repoURL)
+	case stateArtifactHubVersions:
+		// Load values for selected version from Artifact Hub
+		idx := m.ahVersionList.Index()
+		if m.ahSelectedPackage != nil && idx < len(m.ahSelectedPackage.AvailableVersions) {
+			m.ahSelectedVersion = idx
+			selectedVersion := m.ahSelectedPackage.AvailableVersions[idx].Version
+
+			// Fetch the package with specific version to get default_values
+			m.loadingVals = true
+			m.state = stateValueViewer
+
+			return m, func() tea.Msg {
+				pkg, err := m.artifactHubClient.GetPackageVersion(
+					m.ahSelectedPackage.Repository.Name,
+					m.ahSelectedPackage.Name,
+					selectedVersion,
+				)
+				if err != nil {
+					return valuesLoadedMsg{err: err}
+				}
+				return valuesLoadedMsg{values: pkg.DefaultValues}
+			}
 		}
 	}
 
@@ -1238,6 +1271,7 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = normalMode
 		m.searchInput.Blur()
 		m.addRepoStep = 0
+		m.newRepoURL = "" // Reset pre-filled URL
 		return m, nil
 
 	case "enter":
@@ -1258,7 +1292,21 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		case addRepoMode:
 			if m.addRepoStep == 0 {
-				m.newRepoName = m.searchInput.Value()
+				inputName := m.searchInput.Value()
+				// If coming from Artifact Hub and no name provided, use default
+				if inputName == "" && m.newRepoURL != "" && m.ahSelectedPackage != nil {
+					inputName = m.ahSelectedPackage.Repository.Name
+				}
+				m.newRepoName = inputName
+
+				// If URL is already set (from Artifact Hub), skip asking for URL
+				if m.newRepoURL != "" {
+					m.mode = normalMode
+					m.searchInput.Blur()
+					return m, addRepository(m.helmClient, m.newRepoName, m.newRepoURL)
+				}
+
+				// Otherwise ask for URL (normal flow)
 				m.addRepoStep = 1
 				m.searchInput.Reset()
 				m.searchInput.Placeholder = "Repository URL..."
@@ -1659,6 +1707,8 @@ func (m model) View() string {
 		content += m.renderArtifactHubSearch()
 	case stateArtifactHubPackageDetail:
 		content += m.renderArtifactHubPackageDetail()
+	case stateArtifactHubVersions:
+		content += m.renderArtifactHubVersions()
 	}
 
 	footer := "\n"
@@ -1727,6 +1777,11 @@ func (m model) getBreadcrumb() string {
 
 	if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
 		parts = append(parts, "Artifact Hub", m.ahSelectedPackage.Name)
+		return strings.Join(parts, " > ")
+	}
+
+	if m.state == stateArtifactHubVersions && m.ahSelectedPackage != nil {
+		parts = append(parts, "Artifact Hub", m.ahSelectedPackage.Name, "Versions")
 		return strings.Join(parts, " > ")
 	}
 
@@ -2003,11 +2058,12 @@ func (m model) renderArtifactHubPackageDetail() string {
 
 	pkg := m.ahSelectedPackage
 
-	// Build info panel
+	// Build info panel - full screen
 	info := lipgloss.NewStyle().
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("117")).
+		Width(m.termWidth - 8).
 		Render(fmt.Sprintf(
 			"%s %s\n\n"+
 				"Repository: %s\n"+
@@ -2016,8 +2072,9 @@ func (m model) renderArtifactHubPackageDetail() string {
 				"App Version: %s\n"+
 				"Stars: ⭐%d\n"+
 				"Security: %s\n"+
-				"Badges: %s\n\n"+
-				"%s",
+				"Signed: %s\n\n"+
+				"%s\n\n"+
+				"Available versions: %d",
 			pkg.Name,
 			pkg.GetBadges(),
 			pkg.Repository.DisplayName,
@@ -2028,21 +2085,26 @@ func (m model) renderArtifactHubPackageDetail() string {
 			pkg.SecurityReport.GetSecurityBadge(),
 			func() string {
 				if pkg.Signed {
-					return "🔒 Signed"
+					return "🔒 Yes"
 				}
-				return "Not signed"
+				return "No"
 			}(),
 			pkg.Description,
+			len(pkg.AvailableVersions),
 		))
 
-	versionsPanel := ""
-	if len(pkg.AvailableVersions) > 0 {
-		versionsPanel = "\n\n" + panelStyle.Render(m.ahVersionList.View())
+	hint := "\n" + helpStyle.Render("  a: add repository | v: view versions | esc: back  ")
+
+	return info + hint
+}
+
+func (m model) renderArtifactHubVersions() string {
+	if len(m.ahSelectedPackage.AvailableVersions) == 0 {
+		return activePanelStyle.Render("No versions available")
 	}
 
-	hint := "\n" + helpStyle.Render("  enter: add repository to Helm | esc: back  ")
-
-	return info + versionsPanel + hint
+	hint := "\n" + helpStyle.Render("  enter: view values | esc: back  ")
+	return activePanelStyle.Render(m.ahVersionList.View()) + hint
 }
 
 func main() {
