@@ -678,7 +678,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchInput.Placeholder = "Repository name..."
 				m.searchInput.Focus()
 			}
-			if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
+			if (m.state == stateArtifactHubPackageDetail || m.state == stateArtifactHubVersions) && m.ahSelectedPackage != nil {
 				// Add repo from Artifact Hub - only ask for name, URL is auto-filled
 				m.mode = addRepoMode
 				m.addRepoStep = 0
@@ -1158,28 +1158,9 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 
 	case stateArtifactHubVersions:
-		// Load values for selected version from Artifact Hub
-		idx := m.ahVersionList.Index()
-		if m.ahSelectedPackage != nil && idx < len(m.ahSelectedPackage.AvailableVersions) {
-			m.ahSelectedVersion = idx
-			selectedVersion := m.ahSelectedPackage.AvailableVersions[idx].Version
-
-			// Fetch the package with specific version to get default_values
-			m.loadingVals = true
-			m.state = stateValueViewer
-
-			return m, func() tea.Msg {
-				pkg, err := m.artifactHubClient.GetPackageVersion(
-					m.ahSelectedPackage.Repository.Name,
-					m.ahSelectedPackage.Name,
-					selectedVersion,
-				)
-				if err != nil {
-					return valuesLoadedMsg{err: err}
-				}
-				return valuesLoadedMsg{values: pkg.DefaultValues}
-			}
-		}
+		// Can't view values from Artifact Hub - need to add repo first
+		m.successMsg = "Add the repository first (press 'a'), then browse it from the main menu to view values"
+		return m, nil
 	}
 
 	return m, nil
@@ -2103,7 +2084,7 @@ func (m model) renderArtifactHubVersions() string {
 		return activePanelStyle.Render("No versions available")
 	}
 
-	hint := "\n" + helpStyle.Render("  enter: view values | esc: back  ")
+	hint := "\n" + helpStyle.Render("  a: add repository to view values | esc: back  ")
 	return activePanelStyle.Render(m.ahVersionList.View()) + hint
 }
 
