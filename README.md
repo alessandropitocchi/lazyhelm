@@ -22,19 +22,17 @@ Browse Helm repos, explore chart versions, view and edit values files, and compa
 
 ## Installation
 
-<!--
-### Via Go
+### Homebrew
 
 ```bash
-go install github.com/alessandropitocchi/lazyhelm/cmd/lazyhelm@latest
+brew tap alessandropitocchi/lazyhelm
+brew install lazyhelm
 ```
 
-
-Make sure `$HOME/go/bin` is in your PATH:
+Or in one command:
 ```bash
-export PATH=$PATH:$HOME/go/bin
+brew install alessandropitocchi/lazyhelm/lazyhelm
 ```
--->
 
 ### Install script
 
