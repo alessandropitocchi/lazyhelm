@@ -693,6 +693,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case key.Matches(msg, m.keys.ArtifactHub):
+			if m.state == stateRepoList {
+				m.mode = searchMode
+				m.searchInput.Reset()
+				m.searchInput.Placeholder = "Search Artifact Hub..."
+				m.searchInput.Focus()
+				m.state = stateArtifactHubSearch
+			}
+			return m, nil
+
 		case key.Matches(msg, m.keys.Versions):
 			if m.state == stateChartList && len(m.charts) > 0 {
 				m.state = stateChartDetail
@@ -915,6 +925,58 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchInput.Placeholder = "./custom-values.yaml"
 		m.searchInput.Focus()
 		return m, nil
+
+	case artifactHubSearchMsg:
+		m.ahLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.ahPackages = msg.packages
+		items := make([]list.Item, len(msg.packages))
+		for i, pkg := range msg.packages {
+			badges := pkg.GetBadges()
+			stars := fmt.Sprintf("⭐%d", pkg.Stars)
+			security := pkg.SecurityReport.GetSecurityBadge()
+
+			desc := fmt.Sprintf("%s | %s %s | %s", pkg.Repository.DisplayName, stars, badges, security)
+			items[i] = listItem{
+				title:       pkg.Name,
+				description: desc,
+			}
+		}
+		m.ahPackageList.SetItems(items)
+		return m, nil
+
+	case artifactHubPackageMsg:
+		m.ahLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.ahSelectedPackage = msg.pkg
+
+		// Populate version list
+		if len(msg.pkg.AvailableVersions) > 0 {
+			items := make([]list.Item, len(msg.pkg.AvailableVersions))
+			for i, ver := range msg.pkg.AvailableVersions {
+				desc := ""
+				if ver.ContainsSecurityUpdates {
+					desc = "🛡️ Security update"
+				}
+				if ver.Prerelease {
+					desc += " [Pre-release]"
+				}
+				items[i] = listItem{
+					title:       "v" + ver.Version,
+					description: desc,
+				}
+			}
+			m.ahVersionList.SetItems(items)
+		}
+		return m, nil
 	}
 
 	switch m.state {
@@ -932,6 +994,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	case stateDiffViewer:
 		m.diffView, cmd = m.diffView.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateArtifactHubSearch:
+		m.ahPackageList, cmd = m.ahPackageList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateArtifactHubPackageDetail:
+		m.ahVersionList, cmd = m.ahVersionList.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -965,6 +1033,14 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.valuesLines = nil
 	case stateDiffViewer:
 		m.state = stateChartDetail
+	case stateArtifactHubSearch:
+		m.state = stateRepoList
+		m.ahPackages = nil
+		m.ahPackageList.SetItems([]list.Item{})
+	case stateArtifactHubPackageDetail:
+		m.state = stateArtifactHubSearch
+		m.ahSelectedPackage = nil
+		m.ahVersionList.SetItems([]list.Item{})
 	}
 	return m, nil
 }
@@ -1048,6 +1124,25 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 			version := m.versions[idx].Version
 			return m, loadValuesByVersion(m.helmClient, m.cache, chartName, version)
 		}
+
+	case stateArtifactHubSearch:
+		idx := m.ahPackageList.Index()
+		if idx < len(m.ahPackages) {
+			m.ahSelectedPkg = idx
+			pkg := m.ahPackages[idx]
+			m.state = stateArtifactHubPackageDetail
+			m.ahLoading = true
+			return m, loadArtifactHubPackage(m.artifactHubClient, pkg.Repository.Name, pkg.Name)
+		}
+
+	case stateArtifactHubPackageDetail:
+		// On enter in package detail, offer to add repository
+		if m.ahSelectedPackage != nil {
+			repoName := m.ahSelectedPackage.Repository.Name
+			repoURL := m.ahSelectedPackage.Repository.URL
+			m.successMsg = fmt.Sprintf("Adding repository '%s'...", repoName)
+			return m, addRepository(m.helmClient, repoName, repoURL)
+		}
 	}
 
 	return m, nil
@@ -1127,6 +1222,12 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.searchMatches = []int{}
 				m.lastSearchQuery = ""
 				m.updateDiffViewWithSearch() // Restore original without highlights
+
+			case stateArtifactHubSearch:
+				// Return to repo list
+				m.state = stateRepoList
+				m.ahPackages = nil
+				m.ahPackageList.SetItems([]list.Item{})
 			}
 		}
 
@@ -1138,6 +1239,16 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		switch m.mode {
 		case searchMode:
+			// Check if we're in Artifact Hub search state
+			if m.state == stateArtifactHubSearch {
+				query := m.searchInput.Value()
+				if query != "" {
+					m.mode = normalMode
+					m.searchInput.Blur()
+					m.ahLoading = true
+					return m, searchArtifactHub(m.artifactHubClient, query)
+				}
+			}
 			m.mode = normalMode
 			m.searchInput.Blur()
 
@@ -1540,6 +1651,10 @@ func (m model) View() string {
 		content += m.renderValueViewer()
 	case stateDiffViewer:
 		content += m.renderDiffViewer()
+	case stateArtifactHubSearch:
+		content += m.renderArtifactHubSearch()
+	case stateArtifactHubPackageDetail:
+		content += m.renderArtifactHubPackageDetail()
 	}
 
 	footer := "\n"
@@ -1600,6 +1715,18 @@ func (m model) renderSearchHeader() string {
 func (m model) getBreadcrumb() string {
 	parts := []string{"LazyHelm"}
 
+	// Artifact Hub navigation
+	if m.state == stateArtifactHubSearch {
+		parts = append(parts, "Artifact Hub")
+		return strings.Join(parts, " > ")
+	}
+
+	if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
+		parts = append(parts, "Artifact Hub", m.ahSelectedPackage.Name)
+		return strings.Join(parts, " > ")
+	}
+
+	// Regular Helm navigation
 	if m.selectedRepo < len(m.repos) {
 		parts = append(parts, m.repos[m.selectedRepo].Name)
 	}
@@ -1847,6 +1974,71 @@ func openEditorCmd(content string) tea.Cmd {
 		// Don't remove the file yet - we'll do it after saving
 		return editorFinishedMsg{content: string(editedContent), filePath: tmpPath, err: nil}
 	})
+}
+
+func (m model) renderArtifactHubSearch() string {
+	if m.ahLoading {
+		return activePanelStyle.Render("Searching Artifact Hub...")
+	}
+	if len(m.ahPackages) == 0 {
+		return activePanelStyle.Render("No packages found.\nTry a different search query.\n\nPress 'esc' to go back")
+	}
+
+	hint := "\n" + helpStyle.Render("  enter: view details | a: add repository | esc: back  ")
+	return activePanelStyle.Render(m.ahPackageList.View()) + hint
+}
+
+func (m model) renderArtifactHubPackageDetail() string {
+	if m.ahLoading {
+		return activePanelStyle.Render("Loading package details...")
+	}
+
+	if m.ahSelectedPackage == nil {
+		return activePanelStyle.Render("No package selected")
+	}
+
+	pkg := m.ahSelectedPackage
+
+	// Build info panel
+	info := lipgloss.NewStyle().
+		Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("117")).
+		Render(fmt.Sprintf(
+			"%s %s\n\n"+
+				"Repository: %s\n"+
+				"URL: %s\n"+
+				"Latest Version: %s\n"+
+				"App Version: %s\n"+
+				"Stars: ⭐%d\n"+
+				"Security: %s\n"+
+				"Badges: %s\n\n"+
+				"%s",
+			pkg.Name,
+			pkg.GetBadges(),
+			pkg.Repository.DisplayName,
+			pkg.Repository.URL,
+			pkg.Version,
+			pkg.AppVersion,
+			pkg.Stars,
+			pkg.SecurityReport.GetSecurityBadge(),
+			func() string {
+				if pkg.Signed {
+					return "🔒 Signed"
+				}
+				return "Not signed"
+			}(),
+			pkg.Description,
+		))
+
+	versionsPanel := ""
+	if len(pkg.AvailableVersions) > 0 {
+		versionsPanel = "\n\n" + panelStyle.Render(m.ahVersionList.View())
+	}
+
+	hint := "\n" + helpStyle.Render("  enter: add repository to Helm | esc: back  ")
+
+	return info + versionsPanel + hint
 }
 
 func main() {
