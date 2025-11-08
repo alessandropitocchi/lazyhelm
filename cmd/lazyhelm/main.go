@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alessandropitocchi/lazyhelm/internal/artifacthub"
 	"github.com/alessandropitocchi/lazyhelm/internal/helm"
 	"github.com/alessandropitocchi/lazyhelm/internal/ui"
 	"github.com/atotto/clipboard"
@@ -122,6 +123,8 @@ const (
 	stateValueViewer
 	stateDiffViewer
 	stateHelp
+	stateArtifactHubSearch
+	stateArtifactHubPackageDetail
 )
 
 type inputMode int
@@ -162,6 +165,16 @@ type model struct {
 
 	// Horizontal scrolling in values
 	horizontalOffset   int      // Horizontal scroll offset for long lines
+
+	// Artifact Hub
+	artifactHubClient  *artifacthub.Client
+	ahPackages         []artifacthub.Package
+	ahSelectedPackage  *artifacthub.Package
+	ahPackageList      list.Model
+	ahVersionList      list.Model
+	ahSelectedPkg      int
+	ahSelectedVersion  int
+	ahLoading          bool
 
 	repoList     list.Model
 	chartList    list.Model
@@ -219,6 +232,7 @@ type keyMap struct {
 	Copy        key.Binding
 	Diff        key.Binding
 	Edit        key.Binding
+	ArtifactHub key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -307,6 +321,10 @@ var defaultKeys = keyMap{
 		key.WithKeys("e"),
 		key.WithHelp("e", "edit in $EDITOR"),
 	),
+	ArtifactHub: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "search artifact hub"),
+	),
 }
 
 type chartsLoadedMsg struct {
@@ -338,6 +356,16 @@ type editorFinishedMsg struct {
 	content  string
 	filePath string
 	err      error
+}
+
+type artifactHubSearchMsg struct {
+	packages []artifacthub.Package
+	err      error
+}
+
+type artifactHubPackageMsg struct {
+	pkg *artifacthub.Package
+	err error
 }
 
 type listItem struct {
@@ -453,6 +481,26 @@ func generateTemplate(client *helm.Client, chartName, valuesFile, outputPath str
 	}
 }
 
+func searchArtifactHub(client *artifacthub.Client, query string) tea.Cmd {
+	return func() tea.Msg {
+		packages, err := client.SearchPackages(query, 50)
+		if err != nil {
+			return artifactHubSearchMsg{err: err}
+		}
+		return artifactHubSearchMsg{packages: packages}
+	}
+}
+
+func loadArtifactHubPackage(client *artifacthub.Client, repoName, packageName string) tea.Cmd {
+	return func() tea.Msg {
+		pkg, err := client.GetPackageDetails(repoName, packageName)
+		if err != nil {
+			return artifactHubPackageMsg{err: err}
+		}
+		return artifactHubPackageMsg{pkg: pkg}
+	}
+}
+
 func initialModel() model {
 	client := helm.NewClient()
 	cache := helm.NewCache(30 * time.Minute)
@@ -515,23 +563,47 @@ func initialModel() model {
 
 	helpView := help.New()
 
+	// Artifact Hub lists
+	ahPackageDelegate := list.NewDefaultDelegate()
+	ahPackageDelegate.Styles = delegate.Styles
+	ahPackageList := list.New([]list.Item{}, ahPackageDelegate, 0, 0)
+	ahPackageList.Title = "Artifact Hub"
+	ahPackageList.SetShowStatusBar(false)
+	ahPackageList.SetFilteringEnabled(true)
+	ahPackageList.Styles.Title = titleStyle
+	ahPackageList.Styles.FilterPrompt = searchInputStyle
+	ahPackageList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("231"))
+
+	ahVersionDelegate := list.NewDefaultDelegate()
+	ahVersionDelegate.Styles = delegate.Styles
+	ahVersionList := list.New([]list.Item{}, ahVersionDelegate, 0, 0)
+	ahVersionList.Title = "Versions"
+	ahVersionList.SetShowStatusBar(false)
+	ahVersionList.SetFilteringEnabled(true)
+	ahVersionList.Styles.Title = titleStyle
+	ahVersionList.Styles.FilterPrompt = searchInputStyle
+	ahVersionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("231"))
+
 	return model{
-		helmClient:   client,
-		cache:        cache,
-		chartCache:   make(map[string]chartCacheEntry),
-		versionCache: make(map[string]versionCacheEntry),
-		state:        stateRepoList,
-		mode:         normalMode,
-		repos:        repos,
-		repoList:     repoList,
-		chartList:    chartList,
-		versionList:  versionList,
-		valuesView:   valuesView,
-		diffView:     diffView,
-		searchInput:  searchInput,
-		helpView:     helpView,
-		keys:         defaultKeys,
-		err:          err,
+		helmClient:        client,
+		cache:             cache,
+		chartCache:        make(map[string]chartCacheEntry),
+		versionCache:      make(map[string]versionCacheEntry),
+		state:             stateRepoList,
+		mode:              normalMode,
+		repos:             repos,
+		artifactHubClient: artifacthub.NewClient(),
+		ahPackageList:     ahPackageList,
+		ahVersionList:     ahVersionList,
+		repoList:          repoList,
+		chartList:         chartList,
+		versionList:       versionList,
+		valuesView:        valuesView,
+		diffView:          diffView,
+		searchInput:       searchInput,
+		helpView:          helpView,
+		keys:              defaultKeys,
+		err:               err,
 	}
 }
 
