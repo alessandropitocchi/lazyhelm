@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alessandropitocchi/lazyhelm/internal/artifacthub"
 	"github.com/alessandropitocchi/lazyhelm/internal/helm"
 	"github.com/alessandropitocchi/lazyhelm/internal/ui"
 	"github.com/atotto/clipboard"
@@ -45,22 +46,22 @@ var (
 
 var (
 	titleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("111")). // Azzurro chiaro
+			Foreground(lipgloss.Color("33")). // Blu medio - funziona su chiaro e scuro
 			Bold(true).
 			Padding(0, 1)
 
 	panelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("250")). // Grigio chiaro/bianco
+			BorderForeground(lipgloss.Color("240")). // Grigio medio
 			Padding(1, 2)
 
 	activePanelStyle = lipgloss.NewStyle().
 				Border(lipgloss.DoubleBorder()).
-				BorderForeground(lipgloss.Color("255")). // Bianco
+				BorderForeground(lipgloss.Color("33")). // Blu medio invece di bianco
 				Padding(1, 2)
 
 	breadcrumbStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("117")). // Azzurro chiaro brillante
+			Foreground(lipgloss.Color("33")). // Blu medio
 			Bold(true).
 			Padding(0, 1)
 
@@ -77,38 +78,38 @@ var (
 			Padding(0, 2)
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252")) // Grigio molto chiaro
+			Foreground(lipgloss.Color("240")) // Grigio medio - funziona su chiaro e scuro
 
 	addedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("120")). // Verde chiaro delicato
+			Foreground(lipgloss.Color("28")). // Verde scuro/medio
 			Bold(true)
 
 	removedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("210")). // Rosa salmone chiaro (invece di rosso acceso)
+			Foreground(lipgloss.Color("160")). // Rosso medio
 			Bold(true)
 
 	modifiedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("226")). // Giallo brillante
+			Foreground(lipgloss.Color("136")). // Giallo/arancio scuro - meglio su chiaro
 			Bold(true)
 
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("117")). // Azzurro chiaro
+			Foreground(lipgloss.Color("33")). // Blu medio
 			Bold(true).
 			Padding(0, 2)
 
 	pathStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("11")). // Giallo brillante
-			Background(lipgloss.Color("235")). // Sfondo grigio scuro per contrasto
+			Foreground(lipgloss.Color("0")).   // Nero su chiaro, chiaro su scuro (invertito automaticamente)
+			Background(lipgloss.Color("226")). // Giallo brillante
 			Bold(true).
 			Padding(0, 2)
 
 	highlightStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("11")). // Giallo brillante
-			Foreground(lipgloss.Color("0")).  // Nero
+			Background(lipgloss.Color("226")). // Giallo brillante
+			Foreground(lipgloss.Color("0")).   // Nero
 			Bold(true)
 
 	searchInputStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("117")). // Azzurro chiaro
+				Foreground(lipgloss.Color("33")). // Blu medio
 				Padding(0, 1).
 				Bold(true)
 )
@@ -122,6 +123,9 @@ const (
 	stateValueViewer
 	stateDiffViewer
 	stateHelp
+	stateArtifactHubSearch
+	stateArtifactHubPackageDetail
+	stateArtifactHubVersions
 )
 
 type inputMode int
@@ -134,6 +138,7 @@ const (
 	templateValuesMode
 	exportValuesMode
 	saveEditMode
+	confirmRemoveRepoMode
 )
 
 type model struct {
@@ -162,6 +167,16 @@ type model struct {
 
 	// Horizontal scrolling in values
 	horizontalOffset   int      // Horizontal scroll offset for long lines
+
+	// Artifact Hub
+	artifactHubClient  *artifacthub.Client
+	ahPackages         []artifacthub.Package
+	ahSelectedPackage  *artifacthub.Package
+	ahPackageList      list.Model
+	ahVersionList      list.Model
+	ahSelectedPkg      int
+	ahSelectedVersion  int
+	ahLoading          bool
 
 	repoList     list.Model
 	chartList    list.Model
@@ -219,6 +234,9 @@ type keyMap struct {
 	Copy        key.Binding
 	Diff        key.Binding
 	Edit        key.Binding
+	ArtifactHub key.Binding
+	RemoveRepo  key.Binding
+	ClearFilter key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -307,6 +325,18 @@ var defaultKeys = keyMap{
 		key.WithKeys("e"),
 		key.WithHelp("e", "edit in $EDITOR"),
 	),
+	ArtifactHub: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "search artifact hub"),
+	),
+	RemoveRepo: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "remove repository"),
+	),
+	ClearFilter: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "clear filter"),
+	),
 }
 
 type chartsLoadedMsg struct {
@@ -334,11 +364,29 @@ type reposReloadedMsg struct {
 	err   error
 }
 
+type repoRemovedMsg struct {
+	repos    []helm.Repository
+	repoName string
+	err      error
+}
+
 type editorFinishedMsg struct {
 	content  string
 	filePath string
 	err      error
 }
+
+type artifactHubSearchMsg struct {
+	packages []artifacthub.Package
+	err      error
+}
+
+type artifactHubPackageMsg struct {
+	pkg *artifacthub.Package
+	err error
+}
+
+type clearSuccessMsgMsg struct{}
 
 type listItem struct {
 	title       string
@@ -453,6 +501,38 @@ func generateTemplate(client *helm.Client, chartName, valuesFile, outputPath str
 	}
 }
 
+func searchArtifactHub(client *artifacthub.Client, query string) tea.Cmd {
+	return func() tea.Msg {
+		packages, err := client.SearchPackages(query, 50)
+		if err != nil {
+			return artifactHubSearchMsg{err: err}
+		}
+		return artifactHubSearchMsg{packages: packages}
+	}
+}
+
+func loadArtifactHubPackage(client *artifacthub.Client, repoName, packageName string) tea.Cmd {
+	return func() tea.Msg {
+		pkg, err := client.GetPackageDetails(repoName, packageName)
+		if err != nil {
+			return artifactHubPackageMsg{err: err}
+		}
+		return artifactHubPackageMsg{pkg: pkg}
+	}
+}
+
+func clearSuccessMsgAfter(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return clearSuccessMsgMsg{}
+	})
+}
+
+// Helper to set success message and auto-clear after 3 seconds
+func (m *model) setSuccessMsg(msg string) tea.Cmd {
+	m.successMsg = msg
+	return clearSuccessMsgAfter(3 * time.Second)
+}
+
 func initialModel() model {
 	client := helm.NewClient()
 	cache := helm.NewCache(30 * time.Minute)
@@ -466,18 +546,18 @@ func initialModel() model {
 		}
 	}
 
-	// Create custom delegate with better colors
+	// Create custom delegate with better colors for both light and dark backgrounds
 	delegate := list.NewDefaultDelegate()
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(lipgloss.Color("11")).   // Giallo brillante
+		Foreground(lipgloss.Color("33")).   // Blu medio
 		Bold(true).
 		Underline(true)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(lipgloss.Color("117"))   // Azzurro chiaro
+		Foreground(lipgloss.Color("240"))   // Grigio medio
 	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.
-		Foreground(lipgloss.Color("255"))   // Bianco
+		Foreground(lipgloss.AdaptiveColor{Light: "235", Dark: "255"})   // Grigio scuro su chiaro, bianco su scuro
 	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.
-		Foreground(lipgloss.Color("250"))   // Grigio chiaro
+		Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "250"})   // Grigio medio su chiaro, chiaro su scuro
 
 	repoList := list.New(repoItems, delegate, 0, 0)
 	repoList.Title = "Repositories"
@@ -485,7 +565,7 @@ func initialModel() model {
 	repoList.SetFilteringEnabled(true)
 	repoList.Styles.Title = titleStyle
 	repoList.Styles.FilterPrompt = searchInputStyle
-	repoList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("231"))
+	repoList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 
 	chartDelegate := list.NewDefaultDelegate()
 	chartDelegate.Styles = delegate.Styles
@@ -495,7 +575,7 @@ func initialModel() model {
 	chartList.SetFilteringEnabled(true)
 	chartList.Styles.Title = titleStyle
 	chartList.Styles.FilterPrompt = searchInputStyle
-	chartList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("231"))
+	chartList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 
 	versionDelegate := list.NewDefaultDelegate()
 	versionDelegate.Styles = delegate.Styles
@@ -505,7 +585,7 @@ func initialModel() model {
 	versionList.SetFilteringEnabled(true)
 	versionList.Styles.Title = titleStyle
 	versionList.Styles.FilterPrompt = searchInputStyle
-	versionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("231"))
+	versionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 
 	valuesView := viewport.New(0, 0)
 	diffView := viewport.New(0, 0)
@@ -515,23 +595,47 @@ func initialModel() model {
 
 	helpView := help.New()
 
+	// Artifact Hub lists
+	ahPackageDelegate := list.NewDefaultDelegate()
+	ahPackageDelegate.Styles = delegate.Styles
+	ahPackageList := list.New([]list.Item{}, ahPackageDelegate, 0, 0)
+	ahPackageList.Title = "Artifact Hub"
+	ahPackageList.SetShowStatusBar(false)
+	ahPackageList.SetFilteringEnabled(true)
+	ahPackageList.Styles.Title = titleStyle
+	ahPackageList.Styles.FilterPrompt = searchInputStyle
+	ahPackageList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+
+	ahVersionDelegate := list.NewDefaultDelegate()
+	ahVersionDelegate.Styles = delegate.Styles
+	ahVersionList := list.New([]list.Item{}, ahVersionDelegate, 0, 0)
+	ahVersionList.Title = "Versions"
+	ahVersionList.SetShowStatusBar(false)
+	ahVersionList.SetFilteringEnabled(true)
+	ahVersionList.Styles.Title = titleStyle
+	ahVersionList.Styles.FilterPrompt = searchInputStyle
+	ahVersionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+
 	return model{
-		helmClient:   client,
-		cache:        cache,
-		chartCache:   make(map[string]chartCacheEntry),
-		versionCache: make(map[string]versionCacheEntry),
-		state:        stateRepoList,
-		mode:         normalMode,
-		repos:        repos,
-		repoList:     repoList,
-		chartList:    chartList,
-		versionList:  versionList,
-		valuesView:   valuesView,
-		diffView:     diffView,
-		searchInput:  searchInput,
-		helpView:     helpView,
-		keys:         defaultKeys,
-		err:          err,
+		helmClient:        client,
+		cache:             cache,
+		chartCache:        make(map[string]chartCacheEntry),
+		versionCache:      make(map[string]versionCacheEntry),
+		state:             stateRepoList,
+		mode:              normalMode,
+		repos:             repos,
+		artifactHubClient: artifacthub.NewClient(),
+		ahPackageList:     ahPackageList,
+		ahVersionList:     ahVersionList,
+		repoList:          repoList,
+		chartList:         chartList,
+		versionList:       versionList,
+		valuesView:        valuesView,
+		diffView:          diffView,
+		searchInput:       searchInput,
+		helpView:          helpView,
+		keys:              defaultKeys,
+		err:               err,
 	}
 }
 
@@ -554,6 +658,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.repoList.SetSize(w/3, h)
 		m.chartList.SetSize(w/2, h)
 		m.versionList.SetSize(w/3, h)
+
+		// Artifact Hub lists
+		m.ahPackageList.SetSize(w-4, h)
+		m.ahVersionList.SetSize(w/3, h)
 
 		// Values view takes full screen
 		m.valuesView.Width = msg.Width - 6  // Full width minus border padding
@@ -601,6 +709,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchInput.Placeholder = "Repository name..."
 				m.searchInput.Focus()
 			}
+			if (m.state == stateArtifactHubPackageDetail || m.state == stateArtifactHubVersions) && m.ahSelectedPackage != nil {
+				// Add repo from Artifact Hub - only ask for name, URL is auto-filled
+				m.mode = addRepoMode
+				m.addRepoStep = 0
+				m.newRepoURL = m.ahSelectedPackage.Repository.URL // Pre-fill URL
+				m.searchInput.Reset()
+				m.searchInput.Placeholder = fmt.Sprintf("Repository name (default: %s)...", m.ahSelectedPackage.Repository.Name)
+				m.searchInput.Focus()
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.RemoveRepo):
+			if m.state == stateRepoList && len(m.repos) > 0 {
+				// Enter confirmation mode
+				m.mode = confirmRemoveRepoMode
+				idx := m.repoList.Index()
+				if idx < len(m.repos) {
+					m.searchInput.Reset()
+					m.searchInput.Placeholder = fmt.Sprintf("Remove '%s'? (y/n)", m.repos[idx].Name)
+					m.searchInput.Focus()
+				}
+			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Export):
@@ -621,6 +751,79 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case key.Matches(msg, m.keys.ArtifactHub):
+			if m.state == stateRepoList {
+				m.mode = searchMode
+				m.searchInput.Reset()
+				m.searchInput.Placeholder = "Search Artifact Hub..."
+				m.searchInput.Focus()
+				m.state = stateArtifactHubSearch
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.ClearFilter):
+			// Clear filters and restore full lists
+			var clearCmd tea.Cmd
+			switch m.state {
+			case stateRepoList:
+				items := make([]list.Item, len(m.repos))
+				for i, repo := range m.repos {
+					items[i] = listItem{
+						title:       repo.Name,
+						description: repo.URL,
+					}
+				}
+				m.repoList.SetItems(items)
+				clearCmd = m.setSuccessMsg("Filter cleared")
+
+			case stateChartList:
+				items := make([]list.Item, len(m.charts))
+				for i, chart := range m.charts {
+					name := chart.Name
+					if m.selectedRepo < len(m.repos) {
+						name = strings.TrimPrefix(name, m.repos[m.selectedRepo].Name+"/")
+					}
+					items[i] = listItem{
+						title:       name,
+						description: chart.Description,
+					}
+				}
+				m.chartList.SetItems(items)
+				clearCmd = m.setSuccessMsg("Filter cleared")
+
+			case stateChartDetail:
+				items := make([]list.Item, len(m.versions))
+				for i, ver := range m.versions {
+					desc := ""
+					if ver.AppVersion != "" {
+						desc = "App: " + ver.AppVersion
+					}
+					items[i] = listItem{
+						title:       "v" + ver.Version,
+						description: desc,
+					}
+				}
+				m.versionList.SetItems(items)
+				clearCmd = m.setSuccessMsg("Filter cleared")
+
+			case stateArtifactHubSearch:
+				items := make([]list.Item, len(m.ahPackages))
+				for i, pkg := range m.ahPackages {
+					badges := pkg.GetBadges()
+					stars := fmt.Sprintf("⭐%d", pkg.Stars)
+					security := pkg.SecurityReport.GetSecurityBadge()
+
+					desc := fmt.Sprintf("%s | %s %s | %s", pkg.Repository.DisplayName, stars, badges, security)
+					items[i] = listItem{
+						title:       pkg.Name,
+						description: desc,
+					}
+				}
+				m.ahPackageList.SetItems(items)
+				clearCmd = m.setSuccessMsg("Filter cleared")
+			}
+			return m, clearCmd
+
 		case key.Matches(msg, m.keys.Versions):
 			if m.state == stateChartList && len(m.charts) > 0 {
 				m.state = stateChartDetail
@@ -629,6 +832,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if idx < len(m.charts) {
 					return m, loadVersions(m.helmClient, m.versionCache, m.charts[idx].Name)
 				}
+			}
+			if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
+				m.state = stateArtifactHubVersions
 			}
 			return m, nil
 
@@ -647,16 +853,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				yamlPath := ui.GetYAMLPath(m.valuesLines, lineNum)
+				var copyCmd tea.Cmd
 				if yamlPath != "" {
 					err := clipboard.WriteAll(yamlPath)
 					if err != nil {
-						m.successMsg = "Failed to copy to clipboard"
+						copyCmd = m.setSuccessMsg("Failed to copy to clipboard")
 					} else {
-						m.successMsg = "Copied: " + yamlPath
+						copyCmd = m.setSuccessMsg("Copied: " + yamlPath)
 					}
 				} else {
-					m.successMsg = "No YAML path found for current line"
+					copyCmd = m.setSuccessMsg("No YAML path found for current line")
 				}
+				return m, copyCmd
 			}
 			return m, nil
 
@@ -670,8 +878,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Edit):
 			if m.state == stateValueViewer {
 				if m.values == "" {
-					m.successMsg = "No values to edit"
-					return m, nil
+					return m, m.setSuccessMsg("No values to edit")
 				}
 				// Show which editor will be used
 				editor := os.Getenv("EDITOR")
@@ -687,8 +894,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				}
-				m.successMsg = fmt.Sprintf("Opening %s...", editor)
-				return m, openEditorCmd(m.values)
+				editorCmd := m.setSuccessMsg(fmt.Sprintf("Opening %s...", editor))
+				return m, tea.Batch(editorCmd, openEditorCmd(m.values))
 			}
 			return m, nil
 
@@ -797,10 +1004,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case operationDoneMsg:
 		if msg.err != nil {
 			m.err = msg.err
+			return m, nil
 		} else {
-			m.successMsg = msg.success
+			return m, m.setSuccessMsg(msg.success)
 		}
-		return m, nil
+
 
 	case reposReloadedMsg:
 		if msg.err == nil {
@@ -813,26 +1021,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.repoList.SetItems(items)
-			m.successMsg = fmt.Sprintf("Repository '%s' added successfully", m.newRepoName)
 			m.mode = normalMode
+			return m, m.setSuccessMsg(fmt.Sprintf("Repository '%s' added successfully", m.newRepoName))
+		}
+		return m, nil
+
+	case repoRemovedMsg:
+		if msg.err == nil {
+			m.repos = msg.repos
+			items := make([]list.Item, len(msg.repos))
+			for i, repo := range msg.repos {
+				items[i] = listItem{
+					title:       repo.Name,
+					description: repo.URL,
+				}
+			}
+			m.repoList.SetItems(items)
+			m.mode = normalMode
+			return m, m.setSuccessMsg(fmt.Sprintf("Repository '%s' removed successfully", msg.repoName))
 		}
 		return m, nil
 
 	case editorFinishedMsg:
 		if msg.err != nil {
-			m.successMsg = fmt.Sprintf("Editor error: %v", msg.err)
-			return m, nil
+			return m, m.setSuccessMsg(fmt.Sprintf("Editor error: %v", msg.err))
 		}
 
 		// Validate YAML
 		var yamlData interface{}
 		if err := yaml.Unmarshal([]byte(msg.content), &yamlData); err != nil {
-			m.successMsg = fmt.Sprintf("Invalid YAML: %v", err)
 			// Clean up temp file
 			if msg.filePath != "" {
 				os.Remove(msg.filePath)
 			}
-			return m, nil
+			return m, m.setSuccessMsg(fmt.Sprintf("Invalid YAML: %v", err))
 		}
 
 		// Save edited content and temp file path, then ask where to save
@@ -842,6 +1064,62 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searchInput.Reset()
 		m.searchInput.Placeholder = "./custom-values.yaml"
 		m.searchInput.Focus()
+		return m, nil
+
+	case artifactHubSearchMsg:
+		m.ahLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.ahPackages = msg.packages
+		items := make([]list.Item, len(msg.packages))
+		for i, pkg := range msg.packages {
+			badges := pkg.GetBadges()
+			stars := fmt.Sprintf("⭐%d", pkg.Stars)
+			security := pkg.SecurityReport.GetSecurityBadge()
+
+			desc := fmt.Sprintf("%s | %s %s | %s", pkg.Repository.DisplayName, stars, badges, security)
+			items[i] = listItem{
+				title:       pkg.Name,
+				description: desc,
+			}
+		}
+		m.ahPackageList.SetItems(items)
+		return m, nil
+
+	case artifactHubPackageMsg:
+		m.ahLoading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.ahSelectedPackage = msg.pkg
+
+		// Populate version list
+		if len(msg.pkg.AvailableVersions) > 0 {
+			items := make([]list.Item, len(msg.pkg.AvailableVersions))
+			for i, ver := range msg.pkg.AvailableVersions {
+				desc := ""
+				if ver.ContainsSecurityUpdates {
+					desc = "🛡️ Security update"
+				}
+				if ver.Prerelease {
+					desc += " [Pre-release]"
+				}
+				items[i] = listItem{
+					title:       "v" + ver.Version,
+					description: desc,
+				}
+			}
+			m.ahVersionList.SetItems(items)
+		}
+		return m, nil
+
+	case clearSuccessMsgMsg:
+		m.successMsg = ""
 		return m, nil
 	}
 
@@ -860,6 +1138,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	case stateDiffViewer:
 		m.diffView, cmd = m.diffView.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateArtifactHubSearch:
+		m.ahPackageList, cmd = m.ahPackageList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateArtifactHubPackageDetail:
+		m.ahVersionList, cmd = m.ahVersionList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateArtifactHubVersions:
+		m.ahVersionList, cmd = m.ahVersionList.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -893,6 +1180,16 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.valuesLines = nil
 	case stateDiffViewer:
 		m.state = stateChartDetail
+	case stateArtifactHubSearch:
+		m.state = stateRepoList
+		m.ahPackages = nil
+		m.ahPackageList.SetItems([]list.Item{})
+	case stateArtifactHubPackageDetail:
+		m.state = stateArtifactHubSearch
+		m.ahSelectedPackage = nil
+		m.ahVersionList.SetItems([]list.Item{})
+	case stateArtifactHubVersions:
+		m.state = stateArtifactHubPackageDetail
 	}
 	return m, nil
 }
@@ -903,79 +1200,125 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 
 	switch m.state {
 	case stateRepoList:
-		idx := m.repoList.Index()
-		if idx < len(m.repos) {
-			m.selectedRepo = idx
-			m.state = stateChartList
-			m.loading = true
-			return m, loadCharts(m.helmClient, m.chartCache, m.repos[idx].Name)
+		selectedItem := m.repoList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			// Find the correct index in the full list by matching the title
+			for i, repo := range m.repos {
+				if repo.Name == item.title {
+					m.selectedRepo = i
+					m.state = stateChartList
+					m.loading = true
+					return m, loadCharts(m.helmClient, m.chartCache, repo.Name)
+				}
+			}
 		}
 
 	case stateChartList:
-		idx := m.chartList.Index()
-		if idx < len(m.charts) {
-			m.selectedChart = idx
-			m.state = stateChartDetail
-			m.loading = true
-			return m, loadVersions(m.helmClient, m.versionCache, m.charts[idx].Name)
+		selectedItem := m.chartList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			// Find the correct index in the full list by matching the title
+			for i, chart := range m.charts {
+				chartName := chart.Name
+				if m.selectedRepo < len(m.repos) {
+					chartName = strings.TrimPrefix(chartName, m.repos[m.selectedRepo].Name+"/")
+				}
+				if chartName == item.title {
+					m.selectedChart = i
+					m.state = stateChartDetail
+					m.loading = true
+					return m, loadVersions(m.helmClient, m.versionCache, m.charts[i].Name)
+				}
+			}
 		}
 
 	case stateChartDetail:
-		idx := m.versionList.Index()
-		if idx < len(m.versions) {
-			if m.diffMode {
-				if idx == m.compareVersion {
-					m.successMsg = "Please select a different version to compare"
+		selectedItem := m.versionList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			// Find the correct index in the full list by matching the title
+			var selectedIdx int = -1
+			for i, ver := range m.versions {
+				if "v"+ver.Version == item.title {
+					selectedIdx = i
+					break
+				}
+			}
+
+			if selectedIdx >= 0 {
+				if m.diffMode {
+					if selectedIdx == m.compareVersion {
+						return m, m.setSuccessMsg("Please select a different version to compare")
+					}
+
+					chartName := m.charts[m.selectedChart].Name
+					version1 := m.versions[m.compareVersion].Version
+					version2 := m.versions[selectedIdx].Version
+
+					values1, found1 := m.cache.Get(chartName, version1)
+					if !found1 {
+						v, err := m.helmClient.GetChartValuesByVersion(chartName, version1)
+						if err != nil {
+							m.err = err
+							m.diffMode = false
+							return m, nil
+						}
+						values1 = v
+						m.cache.Set(chartName, version1, values1)
+					}
+
+					values2, found2 := m.cache.Get(chartName, version2)
+					if !found2 {
+						v, err := m.helmClient.GetChartValuesByVersion(chartName, version2)
+						if err != nil {
+							m.err = err
+							m.diffMode = false
+							return m, nil
+						}
+						values2 = v
+						m.cache.Set(chartName, version2, values2)
+					}
+
+					diffLines := ui.DiffYAML(values1, values2)
+					diffContent := m.renderDiffContent(diffLines, version1, version2)
+
+					// Save diff lines for search functionality
+					m.diffLines = strings.Split(diffContent, "\n")
+
+					m.diffView.SetContent(diffContent)
+					m.state = stateDiffViewer
+					m.diffMode = false
 					return m, nil
 				}
 
+				m.selectedVersion = selectedIdx
+				m.state = stateValueViewer
+				m.loadingVals = true
 				chartName := m.charts[m.selectedChart].Name
-				version1 := m.versions[m.compareVersion].Version
-				version2 := m.versions[idx].Version
-
-				values1, found1 := m.cache.Get(chartName, version1)
-				if !found1 {
-					v, err := m.helmClient.GetChartValuesByVersion(chartName, version1)
-					if err != nil {
-						m.err = err
-						m.diffMode = false
-						return m, nil
-					}
-					values1 = v
-					m.cache.Set(chartName, version1, values1)
-				}
-
-				values2, found2 := m.cache.Get(chartName, version2)
-				if !found2 {
-					v, err := m.helmClient.GetChartValuesByVersion(chartName, version2)
-					if err != nil {
-						m.err = err
-						m.diffMode = false
-						return m, nil
-					}
-					values2 = v
-					m.cache.Set(chartName, version2, values2)
-				}
-
-				diffLines := ui.DiffYAML(values1, values2)
-				diffContent := m.renderDiffContent(diffLines, version1, version2)
-
-				// Save diff lines for search functionality
-				m.diffLines = strings.Split(diffContent, "\n")
-
-				m.diffView.SetContent(diffContent)
-				m.state = stateDiffViewer
-				m.diffMode = false
-				return m, nil
+				version := m.versions[selectedIdx].Version
+				return m, loadValuesByVersion(m.helmClient, m.cache, chartName, version)
 			}
-
-			m.selectedVersion = idx
-			m.state = stateValueViewer
-			m.loadingVals = true
-			chartName := m.charts[m.selectedChart].Name
-			version := m.versions[idx].Version
-			return m, loadValuesByVersion(m.helmClient, m.cache, chartName, version)
 		}
+
+	case stateArtifactHubSearch:
+		selectedItem := m.ahPackageList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			// Find the correct package in the full list by matching the name
+			for i, pkg := range m.ahPackages {
+				if pkg.Name == item.title {
+					m.ahSelectedPkg = i
+					m.state = stateArtifactHubPackageDetail
+					m.ahLoading = true
+					return m, loadArtifactHubPackage(m.artifactHubClient, pkg.Repository.Name, pkg.Name)
+				}
+			}
+		}
+
+	case stateArtifactHubVersions:
+		// Can't view values from Artifact Hub - need to add repo first
+		return m, m.setSuccessMsg("Add the repository first (press 'a'), then browse it from the main menu to view values")
 	}
 
 	return m, nil
@@ -987,6 +1330,14 @@ func (m model) handleSearch() (tea.Model, tea.Cmd) {
 		m.mode = searchMode
 		m.searchInput.Reset()
 		m.searchInput.Placeholder = "Search..."
+		m.searchInput.Focus()
+	}
+	if m.state == stateArtifactHubSearch {
+		// Allow searching again in Artifact Hub
+		m.successMsg = ""
+		m.mode = searchMode
+		m.searchInput.Reset()
+		m.searchInput.Placeholder = "Search Artifact Hub..."
 		m.searchInput.Focus()
 	}
 	return m, nil
@@ -1055,23 +1406,54 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.searchMatches = []int{}
 				m.lastSearchQuery = ""
 				m.updateDiffViewWithSearch() // Restore original without highlights
+
+			case stateArtifactHubSearch:
+				// Return to repo list
+				m.state = stateRepoList
+				m.ahPackages = nil
+				m.ahPackageList.SetItems([]list.Item{})
 			}
 		}
 
 		m.mode = normalMode
 		m.searchInput.Blur()
 		m.addRepoStep = 0
+		m.newRepoURL = "" // Reset pre-filled URL
 		return m, nil
 
 	case "enter":
 		switch m.mode {
 		case searchMode:
+			// Check if we're in Artifact Hub search state
+			if m.state == stateArtifactHubSearch {
+				query := m.searchInput.Value()
+				if query != "" {
+					m.mode = normalMode
+					m.searchInput.Blur()
+					m.ahLoading = true
+					return m, searchArtifactHub(m.artifactHubClient, query)
+				}
+			}
 			m.mode = normalMode
 			m.searchInput.Blur()
 
 		case addRepoMode:
 			if m.addRepoStep == 0 {
-				m.newRepoName = m.searchInput.Value()
+				inputName := m.searchInput.Value()
+				// If coming from Artifact Hub and no name provided, use default
+				if inputName == "" && m.newRepoURL != "" && m.ahSelectedPackage != nil {
+					inputName = m.ahSelectedPackage.Repository.Name
+				}
+				m.newRepoName = inputName
+
+				// If URL is already set (from Artifact Hub), skip asking for URL
+				if m.newRepoURL != "" {
+					m.mode = normalMode
+					m.searchInput.Blur()
+					return m, addRepository(m.helmClient, m.newRepoName, m.newRepoURL)
+				}
+
+				// Otherwise ask for URL (normal flow)
 				m.addRepoStep = 1
 				m.searchInput.Reset()
 				m.searchInput.Placeholder = "Repository URL..."
@@ -1153,12 +1535,39 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.editTempFile = ""
 			}
 
-			if err != nil {
-				m.successMsg = fmt.Sprintf("Error saving: %v", err)
-			} else {
-				m.successMsg = fmt.Sprintf("✓ Values saved to %s", path)
-			}
 			m.editedContent = "" // Clear edited content
+			if err != nil {
+				return m, m.setSuccessMsg(fmt.Sprintf("Error saving: %v", err))
+			} else {
+				return m, m.setSuccessMsg(fmt.Sprintf("✓ Values saved to %s", path))
+			}
+
+		case confirmRemoveRepoMode:
+			response := strings.ToLower(m.searchInput.Value())
+			m.mode = normalMode
+			m.searchInput.Blur()
+
+			if response == "y" || response == "yes" {
+				// Remove the repository
+				idx := m.repoList.Index()
+				if idx < len(m.repos) {
+					repoName := m.repos[idx].Name
+					return m, func() tea.Msg {
+						err := m.helmClient.RemoveRepository(repoName)
+						if err != nil {
+							return operationDoneMsg{err: err}
+						}
+
+						// Reload repositories
+						repos, repoErr := m.helmClient.ListRepositories()
+						if repoErr != nil {
+							return operationDoneMsg{success: fmt.Sprintf("Repository '%s' removed, but failed to reload list", repoName)}
+						}
+
+						return repoRemovedMsg{repos: repos, repoName: repoName}
+					}
+				}
+			}
 			return m, nil
 		}
 		return m, nil
@@ -1382,7 +1791,7 @@ func (m *model) updateValuesViewWithSearch() {
 
 		// Add continuation indicator if line continues
 		if hasMore {
-			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("117")).Bold(true)
+			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
 			highlighted += arrowStyle.Render(" →")
 		}
 
@@ -1468,6 +1877,12 @@ func (m model) View() string {
 		content += m.renderValueViewer()
 	case stateDiffViewer:
 		content += m.renderDiffViewer()
+	case stateArtifactHubSearch:
+		content += m.renderArtifactHubSearch()
+	case stateArtifactHubPackageDetail:
+		content += m.renderArtifactHubPackageDetail()
+	case stateArtifactHubVersions:
+		content += m.renderArtifactHubVersions()
 	}
 
 	footer := "\n"
@@ -1528,6 +1943,23 @@ func (m model) renderSearchHeader() string {
 func (m model) getBreadcrumb() string {
 	parts := []string{"LazyHelm"}
 
+	// Artifact Hub navigation
+	if m.state == stateArtifactHubSearch {
+		parts = append(parts, "Artifact Hub")
+		return strings.Join(parts, " > ")
+	}
+
+	if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
+		parts = append(parts, "Artifact Hub", m.ahSelectedPackage.Name)
+		return strings.Join(parts, " > ")
+	}
+
+	if m.state == stateArtifactHubVersions && m.ahSelectedPackage != nil {
+		parts = append(parts, "Artifact Hub", m.ahSelectedPackage.Name, "Versions")
+		return strings.Join(parts, " > ")
+	}
+
+	// Regular Helm navigation
 	if m.selectedRepo < len(m.repos) {
 		parts = append(parts, m.repos[m.selectedRepo].Name)
 	}
@@ -1646,16 +2078,19 @@ func (m model) renderHelp() string {
 	help += "    esc         Go back / Cancel\n"
 	help += "    q           Quit\n\n"
 	help += "  Actions:\n"
-	help += "    /           Search in current view\n"
+	help += "    /           Search/filter in current view\n"
+	help += "    c           Clear search filter\n"
 	help += "    n           Next search result (in values)\n"
 	help += "    N           Previous search result (in values)\n"
 	help += "    a           Add repository (in repo list)\n"
+	help += "    r           Remove repository (in repo list)\n"
 	help += "    v           View versions (in chart list)\n"
 	help += "    w           Write/export values (in chart detail/values)\n"
 	help += "    e           Edit in external editor (in values view)\n"
 	help += "    t           Generate template (in chart detail/values)\n"
 	help += "    y           Copy YAML path to clipboard (in values)\n"
 	help += "    d           Diff two versions (in chart detail)\n"
+	help += "    s           Search Artifact Hub (in repo list)\n"
 	help += "    ?           Toggle help\n\n"
 	help += "  Values View:\n"
 	help += "    - Use ←/→ or h/l to scroll horizontally\n"
@@ -1699,6 +2134,8 @@ func (m model) renderInputPrompt() string {
 		prompt = "Values file (optional): " + m.searchInput.View()
 	case saveEditMode:
 		prompt = "Save to: " + m.searchInput.View()
+	case confirmRemoveRepoMode:
+		prompt = m.searchInput.Placeholder + " " + m.searchInput.View()
 	default:
 		return ""
 	}
@@ -1775,6 +2212,78 @@ func openEditorCmd(content string) tea.Cmd {
 		// Don't remove the file yet - we'll do it after saving
 		return editorFinishedMsg{content: string(editedContent), filePath: tmpPath, err: nil}
 	})
+}
+
+func (m model) renderArtifactHubSearch() string {
+	if m.ahLoading {
+		return activePanelStyle.Render("Searching Artifact Hub...")
+	}
+	if len(m.ahPackages) == 0 {
+		return activePanelStyle.Render("No packages found.\nTry a different search query.\n\nPress 'esc' to go back")
+	}
+
+	hint := "\n" + helpStyle.Render("  enter: view details | a: add repository | esc: back  ")
+	return activePanelStyle.Render(m.ahPackageList.View()) + hint
+}
+
+func (m model) renderArtifactHubPackageDetail() string {
+	if m.ahLoading {
+		return activePanelStyle.Render("Loading package details...")
+	}
+
+	if m.ahSelectedPackage == nil {
+		return activePanelStyle.Render("No package selected")
+	}
+
+	pkg := m.ahSelectedPackage
+
+	// Build info panel - full screen
+	info := lipgloss.NewStyle().
+		Padding(1, 2).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("33")).
+		Width(m.termWidth - 8).
+		Render(fmt.Sprintf(
+			"%s %s\n\n"+
+				"Repository: %s\n"+
+				"URL: %s\n"+
+				"Latest Version: %s\n"+
+				"App Version: %s\n"+
+				"Stars: ⭐%d\n"+
+				"Security: %s\n"+
+				"Signed: %s\n\n"+
+				"%s\n\n"+
+				"Available versions: %d",
+			pkg.Name,
+			pkg.GetBadges(),
+			pkg.Repository.DisplayName,
+			pkg.Repository.URL,
+			pkg.Version,
+			pkg.AppVersion,
+			pkg.Stars,
+			pkg.SecurityReport.GetSecurityBadge(),
+			func() string {
+				if pkg.Signed {
+					return "🔒 Yes"
+				}
+				return "No"
+			}(),
+			pkg.Description,
+			len(pkg.AvailableVersions),
+		))
+
+	hint := "\n" + helpStyle.Render("  a: add repository | v: view versions | esc: back  ")
+
+	return info + hint
+}
+
+func (m model) renderArtifactHubVersions() string {
+	if len(m.ahSelectedPackage.AvailableVersions) == 0 {
+		return activePanelStyle.Render("No versions available")
+	}
+
+	hint := "\n" + helpStyle.Render("  a: add repository to view values | esc: back  ")
+	return activePanelStyle.Render(m.ahVersionList.View()) + hint
 }
 
 func main() {
