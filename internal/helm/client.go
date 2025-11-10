@@ -68,33 +68,39 @@ type Chart struct {
 }
 
 func (c *Client) SearchCharts(repoName string) ([]Chart, error) {
-	args := []string{"search", "repo", repoName, "--output", "json"}
-	
+	// Add trailing slash to search only in this specific repository
+	args := []string{"search", "repo", repoName + "/", "--output", "json"}
+
 	cmd := exec.Command("helm", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("helm search failed: %w", err)
 	}
-	
+
 	var results []struct {
 		Name        string `json:"name"`
 		Version     string `json:"version"`
 		Description string `json:"description"`
 	}
-	
+
 	if err := json.Unmarshal(output, &results); err != nil {
 		return nil, err
 	}
-	
-	charts := make([]Chart, len(results))
-	for i, r := range results {
-		charts[i] = Chart{
-			Name:        r.Name,
-			Version:     r.Version,
-			Description: r.Description,
+
+	// Filter to ensure we only get charts from this repository
+	repoPrefix := repoName + "/"
+	charts := make([]Chart, 0)
+	for _, r := range results {
+		// Only include charts that start with "repoName/"
+		if len(r.Name) > len(repoPrefix) && r.Name[:len(repoPrefix)] == repoPrefix {
+			charts = append(charts, Chart{
+				Name:        r.Name,
+				Version:     r.Version,
+				Description: r.Description,
+			})
 		}
 	}
-	
+
 	return charts, nil
 }
 
