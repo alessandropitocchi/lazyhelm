@@ -126,6 +126,7 @@ type navigationState int
 
 const (
 	stateMainMenu navigationState = iota
+	stateBrowseMenu
 	stateRepoList
 	stateChartList
 	stateChartDetail
@@ -188,6 +189,7 @@ type model struct {
 	ahLoading          bool
 
 	mainMenu     list.Model
+	browseMenu   list.Model
 	repoList     list.Model
 	chartList    list.Model
 	versionList  list.Model
@@ -641,6 +643,19 @@ func initialModel() model {
 	mainMenu.SetFilteringEnabled(false)
 	mainMenu.Styles.Title = titleStyle
 
+	// Browse Menu (submenu for Browse Repositories)
+	browseMenuItems := []list.Item{
+		listItem{title: "Local Repositories", description: "Browse your configured Helm repositories"},
+		listItem{title: "Search Artifact Hub", description: "Search charts on Artifact Hub"},
+	}
+	browseMenuDelegate := list.NewDefaultDelegate()
+	browseMenuDelegate.Styles = delegate.Styles
+	browseMenu := list.New(browseMenuItems, browseMenuDelegate, 0, 0)
+	browseMenu.Title = "Browse Repositories"
+	browseMenu.SetShowStatusBar(false)
+	browseMenu.SetFilteringEnabled(false)
+	browseMenu.Styles.Title = titleStyle
+
 	return model{
 		helmClient:        client,
 		cache:             cache,
@@ -653,6 +668,7 @@ func initialModel() model {
 		ahPackageList:     ahPackageList,
 		ahVersionList:     ahVersionList,
 		mainMenu:          mainMenu,
+		browseMenu:        browseMenu,
 		repoList:          repoList,
 		chartList:         chartList,
 		versionList:       versionList,
@@ -682,6 +698,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		w := msg.Width - 4
 
 		m.mainMenu.SetSize(w/2, h)
+		m.browseMenu.SetSize(w/2, h)
 		m.repoList.SetSize(w/3, h)
 		m.chartList.SetSize(w/2, h)
 		m.versionList.SetSize(w/3, h)
@@ -749,12 +766,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.RemoveRepo):
 			if m.state == stateRepoList && len(m.repos) > 0 {
-				// Enter confirmation mode
-				m.mode = confirmRemoveRepoMode
-				idx := m.repoList.Index()
-				if idx < len(m.repos) {
+				// Enter confirmation mode - use selected item to handle filtered lists
+				selectedItem := m.repoList.SelectedItem()
+				if selectedItem != nil {
+					item := selectedItem.(listItem)
+					m.mode = confirmRemoveRepoMode
 					m.searchInput.Reset()
-					m.searchInput.Placeholder = fmt.Sprintf("Remove '%s'? (y/n)", m.repos[idx].Name)
+					m.searchInput.Placeholder = fmt.Sprintf("Remove '%s'? (y/n)", item.title)
 					m.searchInput.Focus()
 				}
 			}
@@ -779,7 +797,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.ArtifactHub):
-			if m.state == stateRepoList || m.state == stateMainMenu {
+			if m.state == stateRepoList {
 				m.mode = searchMode
 				m.searchInput.Reset()
 				m.searchInput.Placeholder = "Search Artifact Hub..."
@@ -1154,6 +1172,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateMainMenu:
 		m.mainMenu, cmd = m.mainMenu.Update(msg)
 		cmds = append(cmds, cmd)
+	case stateBrowseMenu:
+		m.browseMenu, cmd = m.browseMenu.Update(msg)
+		cmds = append(cmds, cmd)
 	case stateRepoList:
 		m.repoList, cmd = m.repoList.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1196,8 +1217,10 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	}
 
 	switch m.state {
-	case stateRepoList:
+	case stateBrowseMenu:
 		m.state = stateMainMenu
+	case stateRepoList:
+		m.state = stateBrowseMenu
 	case stateChartList:
 		m.state = stateRepoList
 		m.charts = nil
@@ -1213,7 +1236,7 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	case stateDiffViewer:
 		m.state = stateChartDetail
 	case stateArtifactHubSearch:
-		m.state = stateMainMenu
+		m.state = stateBrowseMenu
 		m.ahPackages = nil
 		m.ahPackageList.SetItems([]list.Item{})
 	case stateArtifactHubPackageDetail:
@@ -1237,12 +1260,30 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 			item := selectedItem.(listItem)
 			switch item.title {
 			case "Browse Repositories":
-				m.state = stateRepoList
+				m.state = stateBrowseMenu
 				return m, nil
 			case "Cluster Releases":
 				return m, m.setSuccessMsg("Feature coming soon!")
 			case "Settings":
 				return m, m.setSuccessMsg("Feature coming soon!")
+			}
+		}
+
+	case stateBrowseMenu:
+		selectedItem := m.browseMenu.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			switch item.title {
+			case "Local Repositories":
+				m.state = stateRepoList
+				return m, nil
+			case "Search Artifact Hub":
+				m.mode = searchMode
+				m.searchInput.Reset()
+				m.searchInput.Placeholder = "Search Artifact Hub..."
+				m.searchInput.Focus()
+				m.state = stateArtifactHubSearch
+				return m, nil
 			}
 		}
 
@@ -1595,10 +1636,11 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.Blur()
 
 			if response == "y" || response == "yes" {
-				// Remove the repository
-				idx := m.repoList.Index()
-				if idx < len(m.repos) {
-					repoName := m.repos[idx].Name
+				// Remove the repository - use selected item to handle filtered lists
+				selectedItem := m.repoList.SelectedItem()
+				if selectedItem != nil {
+					item := selectedItem.(listItem)
+					repoName := item.title
 					return m, func() tea.Msg {
 						err := m.helmClient.RemoveRepository(repoName)
 						if err != nil {
@@ -1916,6 +1958,8 @@ func (m model) View() string {
 	switch m.state {
 	case stateMainMenu:
 		content += m.renderMainMenu()
+	case stateBrowseMenu:
+		content += m.renderBrowseMenu()
 	case stateRepoList:
 		content += m.renderRepoList()
 	case stateChartList:
@@ -2034,6 +2078,10 @@ func (m model) getBreadcrumb() string {
 
 func (m model) renderMainMenu() string {
 	return activePanelStyle.Render(m.mainMenu.View())
+}
+
+func (m model) renderBrowseMenu() string {
+	return activePanelStyle.Render(m.browseMenu.View())
 }
 
 func (m model) renderRepoList() string {
