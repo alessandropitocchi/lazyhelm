@@ -201,3 +201,17 @@ func (c *Client) RemoveRepository(name string) error {
 	}
 	return nil
 }
+
+func (c *Client) UpdateRepository(name string) error {
+	args := []string{"repo", "update"}
+	if name != "" {
+		args = append(args, name)
+	}
+
+	cmd := exec.Command("helm", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("helm repo update failed: %w\nOutput: %s", err, string(output))
+	}
+	return nil
+}
