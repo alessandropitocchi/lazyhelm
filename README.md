@@ -2,6 +2,12 @@
 
 A terminal UI for browsing and managing Helm charts. Inspired by lazygit and lazydocker.
 
+## Demo
+
+![LazyHelm Demo](demo.gif)
+
+*Demo updated to version 0.2.2*
+
 ## What it does
 
 Browse Helm repos, explore chart versions, view and edit values files, and compare versions - all in your terminal. No need to remember helm commands or manually fetch values.
@@ -79,26 +85,34 @@ Main Menu
 
 ### Navigation
 - `↑/k`, `↓/j` - Move up/down
-- `←/h`, `→/l` - Scroll horizontally (values view)
-- `enter` - Select / Go deeper
-- `esc` - Go back
-- `q` - Quit
+- `←/h`, `→/l` - Scroll left/right (in values view)
+- `enter` - Select item / Go deeper
+- `esc` - Go back to previous screen
+- `q` - Quit application
+- `?` - Toggle help screen
 
-### Actions
-- `/` - Search/filter current view
+### Search & Filter
+- `/` - Search/filter in current view
 - `c` - Clear search filter
-- `n` / `N` - Next/Previous search result
+- `n` - Next search result
+- `N` - Previous search result
+
+### Repository Management
+- `a` - Add new repository
+- `r` - Remove selected repository
+- `u` - Update repository index (helm repo update)
 - `s` - Search Artifact Hub
-- `a` - Add repository
-- `r` - Remove repository
-- `u` - Update repository (runs `helm repo update`)
-- `e` - Edit values in external editor
-- `w` - Export values to file
+
+### Chart & Version Actions
+- `v` - View all versions (in chart list)
+- `d` - Diff two versions (select first, then second)
+
+### Values View
+- `e` - Edit values in external editor ($EDITOR)
+- `w` - Write/export values to file
 - `t` - Generate Helm template
-- `v` - View versions
-- `y` - Copy YAML path
-- `d` - Diff two versions
-- `?` - Help
+- `y` - Copy YAML path to clipboard
+- `←/→`, `h/l` - Scroll horizontally for long lines
 
 ## How it works
 
