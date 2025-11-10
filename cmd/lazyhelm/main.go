@@ -248,6 +248,7 @@ type keyMap struct {
 	Edit        key.Binding
 	ArtifactHub key.Binding
 	RemoveRepo  key.Binding
+	UpdateRepo  key.Binding
 	ClearFilter key.Binding
 }
 
@@ -344,6 +345,10 @@ var defaultKeys = keyMap{
 	RemoveRepo: key.NewBinding(
 		key.WithKeys("r"),
 		key.WithHelp("r", "remove repository"),
+	),
+	UpdateRepo: key.NewBinding(
+		key.WithKeys("u"),
+		key.WithHelp("u", "update repository"),
 	),
 	ClearFilter: key.NewBinding(
 		key.WithKeys("c"),
@@ -774,6 +779,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.searchInput.Reset()
 					m.searchInput.Placeholder = fmt.Sprintf("Remove '%s'? (y/n)", item.title)
 					m.searchInput.Focus()
+				}
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.UpdateRepo):
+			if m.state == stateRepoList && len(m.repos) > 0 {
+				selectedItem := m.repoList.SelectedItem()
+				if selectedItem != nil {
+					item := selectedItem.(listItem)
+					repoName := item.title
+					return m, func() tea.Msg {
+						err := m.helmClient.UpdateRepository(repoName)
+						if err != nil {
+							return operationDoneMsg{err: err}
+						}
+						return operationDoneMsg{success: fmt.Sprintf("Repository '%s' updated successfully", repoName)}
+					}
 				}
 			}
 			return m, nil
@@ -2185,6 +2207,7 @@ func (m model) renderHelp() string {
 	help += "    N           Previous search result (in values)\n"
 	help += "    a           Add repository (in repo list)\n"
 	help += "    r           Remove repository (in repo list)\n"
+	help += "    u           Update repository index (in repo list)\n"
 	help += "    v           View versions (in chart list)\n"
 	help += "    w           Write/export values (in chart detail/values)\n"
 	help += "    e           Edit in external editor (in values view)\n"

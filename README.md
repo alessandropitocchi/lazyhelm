@@ -8,9 +8,11 @@ Browse Helm repos, explore chart versions, view and edit values files, and compa
 
 ## Features
 
+- **Intuitive menu system** - Main menu with organized sections for browsing and future cluster management
 - Interactive browsing of Helm repositories and charts
 - Search and browse Artifact Hub directly from the UI
 - Add repositories from Artifact Hub with package info and security reports
+- **Update repository indexes** - Keep your local chart indexes up to date with `helm repo update`
 - Syntax-highlighted YAML viewing
 - Edit values in your preferred editor (nvim/vim/vi/etc)
 - Compare values between versions with diff view
@@ -18,7 +20,7 @@ Browse Helm repos, explore chart versions, view and edit values files, and compa
 - Copy YAML paths to clipboard
 - Export values to files
 - Template generation preview
-- Repository management (add/remove)
+- Repository management (add/remove/update)
 
 ## Installation
 
@@ -60,6 +62,19 @@ Set your editor if you want (defaults to nvim → vim → vi):
 export EDITOR=nvim
 ```
 
+### Menu Structure
+
+LazyHelm uses an intuitive menu system to organize functionality:
+
+```
+Main Menu
+├── Browse Repositories
+│   ├── Local Repositories - Browse your configured Helm repos
+│   └── Search Artifact Hub - Search charts on Artifact Hub
+├── Cluster Releases (Coming Soon) - Manage deployed releases
+└── Settings (Coming Soon) - Configure LazyHelm
+```
+
 ## Keybindings
 
 ### Navigation
@@ -76,6 +91,7 @@ export EDITOR=nvim
 - `s` - Search Artifact Hub
 - `a` - Add repository
 - `r` - Remove repository
+- `u` - Update repository (runs `helm repo update`)
 - `e` - Edit values in external editor
 - `w` - Export values to file
 - `t` - Generate Helm template
@@ -109,8 +125,7 @@ go build -o lazyhelm ./cmd/lazyhelm
 ## TODO
 
 - Helm operations (install/upgrade/uninstall)
-- Show deployed releases from K8s
-- Repository update functionality
+- Show deployed releases from K8s (Cluster Releases menu)
 - Config file
 - Bookmarks
 
