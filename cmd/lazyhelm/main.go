@@ -125,7 +125,8 @@ var (
 type navigationState int
 
 const (
-	stateRepoList navigationState = iota
+	stateMainMenu navigationState = iota
+	stateRepoList
 	stateChartList
 	stateChartDetail
 	stateValueViewer
@@ -186,6 +187,7 @@ type model struct {
 	ahSelectedVersion  int
 	ahLoading          bool
 
+	mainMenu     list.Model
 	repoList     list.Model
 	chartList    list.Model
 	versionList  list.Model
@@ -625,17 +627,32 @@ func initialModel() model {
 	ahVersionList.Styles.FilterPrompt = searchInputStyle
 	ahVersionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
+	// Main Menu
+	menuItems := []list.Item{
+		listItem{title: "Browse Repositories", description: "Browse Helm repositories and charts"},
+		listItem{title: "Cluster Releases", description: "View and manage deployed Helm releases (Coming Soon)"},
+		listItem{title: "Settings", description: "Configure LazyHelm settings (Coming Soon)"},
+	}
+	mainMenuDelegate := list.NewDefaultDelegate()
+	mainMenuDelegate.Styles = delegate.Styles
+	mainMenu := list.New(menuItems, mainMenuDelegate, 0, 0)
+	mainMenu.Title = "LazyHelm"
+	mainMenu.SetShowStatusBar(false)
+	mainMenu.SetFilteringEnabled(false)
+	mainMenu.Styles.Title = titleStyle
+
 	return model{
 		helmClient:        client,
 		cache:             cache,
 		chartCache:        make(map[string]chartCacheEntry),
 		versionCache:      make(map[string]versionCacheEntry),
-		state:             stateRepoList,
+		state:             stateMainMenu,
 		mode:              normalMode,
 		repos:             repos,
 		artifactHubClient: artifacthub.NewClient(),
 		ahPackageList:     ahPackageList,
 		ahVersionList:     ahVersionList,
+		mainMenu:          mainMenu,
 		repoList:          repoList,
 		chartList:         chartList,
 		versionList:       versionList,
@@ -664,6 +681,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h := msg.Height - 10
 		w := msg.Width - 4
 
+		m.mainMenu.SetSize(w/2, h)
 		m.repoList.SetSize(w/3, h)
 		m.chartList.SetSize(w/2, h)
 		m.versionList.SetSize(w/3, h)
@@ -761,7 +779,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.ArtifactHub):
-			if m.state == stateRepoList {
+			if m.state == stateRepoList || m.state == stateMainMenu {
 				m.mode = searchMode
 				m.searchInput.Reset()
 				m.searchInput.Placeholder = "Search Artifact Hub..."
@@ -1133,6 +1151,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.state {
+	case stateMainMenu:
+		m.mainMenu, cmd = m.mainMenu.Update(msg)
+		cmds = append(cmds, cmd)
 	case stateRepoList:
 		m.repoList, cmd = m.repoList.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1175,6 +1196,8 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	}
 
 	switch m.state {
+	case stateRepoList:
+		m.state = stateMainMenu
 	case stateChartList:
 		m.state = stateRepoList
 		m.charts = nil
@@ -1190,7 +1213,7 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	case stateDiffViewer:
 		m.state = stateChartDetail
 	case stateArtifactHubSearch:
-		m.state = stateRepoList
+		m.state = stateMainMenu
 		m.ahPackages = nil
 		m.ahPackageList.SetItems([]list.Item{})
 	case stateArtifactHubPackageDetail:
@@ -1208,6 +1231,21 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 	m.successMsg = ""
 
 	switch m.state {
+	case stateMainMenu:
+		selectedItem := m.mainMenu.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			switch item.title {
+			case "Browse Repositories":
+				m.state = stateRepoList
+				return m, nil
+			case "Cluster Releases":
+				return m, m.setSuccessMsg("Feature coming soon!")
+			case "Settings":
+				return m, m.setSuccessMsg("Feature coming soon!")
+			}
+		}
+
 	case stateRepoList:
 		selectedItem := m.repoList.SelectedItem()
 		if selectedItem != nil {
@@ -1876,6 +1914,8 @@ func (m model) View() string {
 	}
 
 	switch m.state {
+	case stateMainMenu:
+		content += m.renderMainMenu()
 	case stateRepoList:
 		content += m.renderRepoList()
 	case stateChartList:
@@ -1990,6 +2030,10 @@ func (m model) getBreadcrumb() string {
 	}
 
 	return strings.Join(parts, " > ")
+}
+
+func (m model) renderMainMenu() string {
+	return activePanelStyle.Render(m.mainMenu.View())
 }
 
 func (m model) renderRepoList() string {
