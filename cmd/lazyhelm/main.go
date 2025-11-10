@@ -45,8 +45,10 @@ var (
 )
 
 var (
+	// Stile fzf-like con sfondi per massima leggibilità
 	titleStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("33")). // Blu medio - funziona su chiaro e scuro
+			Foreground(lipgloss.Color("0")).   // Nero/Bianco (adaptive)
+			Background(lipgloss.Color("105")). // Purple medio
 			Bold(true).
 			Padding(0, 1)
 
@@ -57,59 +59,65 @@ var (
 
 	activePanelStyle = lipgloss.NewStyle().
 				Border(lipgloss.DoubleBorder()).
-				BorderForeground(lipgloss.Color("33")). // Blu medio invece di bianco
+				BorderForeground(lipgloss.Color("141")). // Violet chiaro
 				Padding(1, 2)
 
 	breadcrumbStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("33")). // Blu medio
+			Foreground(lipgloss.Color("0")).   // Nero/Bianco
+			Background(lipgloss.Color("73")).  // Cyan/Teal
 			Bold(true).
 			Padding(0, 1)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("231")). // Bianco
-			Background(lipgloss.Color("28")).  // Sfondo verde
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("120")). // Verde chiaro
 			Bold(true).
 			Padding(0, 2)
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("231")). // Bianco
-			Background(lipgloss.Color("196")). // Sfondo rosso brillante
+			Background(lipgloss.Color("196")). // Rosso brillante
 			Bold(true).
 			Padding(0, 2)
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")) // Grigio medio - funziona su chiaro e scuro
+			Foreground(lipgloss.Color("244")) // Grigio medio
 
 	addedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("28")). // Verde scuro/medio
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("120")). // Verde chiaro
 			Bold(true)
 
 	removedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("160")). // Rosso medio
+			Foreground(lipgloss.Color("231")). // Bianco
+			Background(lipgloss.Color("160")). // Rosso medio
 			Bold(true)
 
 	modifiedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("136")). // Giallo/arancio scuro - meglio su chiaro
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("228")). // Giallo chiaro
 			Bold(true)
 
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("33")). // Blu medio
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("141")). // Violet
 			Bold(true).
 			Padding(0, 2)
 
 	pathStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("0")).   // Nero su chiaro, chiaro su scuro (invertito automaticamente)
-			Background(lipgloss.Color("226")). // Giallo brillante
+			Foreground(lipgloss.Color("0")).   // Nero
+			Background(lipgloss.Color("228")). // Giallo chiaro
 			Bold(true).
 			Padding(0, 2)
 
 	highlightStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("226")). // Giallo brillante
+			Background(lipgloss.Color("228")). // Giallo chiaro
 			Foreground(lipgloss.Color("0")).   // Nero
 			Bold(true)
 
 	searchInputStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("33")). // Blu medio
+				Foreground(lipgloss.Color("0")).   // Nero
+				Background(lipgloss.Color("141")). // Violet
 				Padding(0, 1).
 				Bold(true)
 )
@@ -117,7 +125,9 @@ var (
 type navigationState int
 
 const (
-	stateRepoList navigationState = iota
+	stateMainMenu navigationState = iota
+	stateBrowseMenu
+	stateRepoList
 	stateChartList
 	stateChartDetail
 	stateValueViewer
@@ -178,6 +188,8 @@ type model struct {
 	ahSelectedVersion  int
 	ahLoading          bool
 
+	mainMenu     list.Model
+	browseMenu   list.Model
 	repoList     list.Model
 	chartList    list.Model
 	versionList  list.Model
@@ -546,18 +558,19 @@ func initialModel() model {
 		}
 	}
 
-	// Create custom delegate with better colors for both light and dark backgrounds
+	// Create custom delegate with fzf-like colors (background for selected items)
 	delegate := list.NewDefaultDelegate()
 	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
-		Foreground(lipgloss.Color("33")).   // Blu medio
-		Bold(true).
-		Underline(true)
+		Foreground(lipgloss.Color("0")).    // Nero/Bianco (adaptive)
+		Background(lipgloss.Color("141")).  // Violet - stile fzf
+		Bold(true)
 	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
-		Foreground(lipgloss.Color("240"))   // Grigio medio
+		Foreground(lipgloss.Color("0")).    // Nero/Bianco
+		Background(lipgloss.Color("141"))   // Violet
 	delegate.Styles.NormalTitle = delegate.Styles.NormalTitle.
 		Foreground(lipgloss.AdaptiveColor{Light: "235", Dark: "255"})   // Grigio scuro su chiaro, bianco su scuro
 	delegate.Styles.NormalDesc = delegate.Styles.NormalDesc.
-		Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "250"})   // Grigio medio su chiaro, chiaro su scuro
+		Foreground(lipgloss.AdaptiveColor{Light: "240", Dark: "250"})   // Grigio medio
 
 	repoList := list.New(repoItems, delegate, 0, 0)
 	repoList.Title = "Repositories"
@@ -565,7 +578,7 @@ func initialModel() model {
 	repoList.SetFilteringEnabled(true)
 	repoList.Styles.Title = titleStyle
 	repoList.Styles.FilterPrompt = searchInputStyle
-	repoList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	repoList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	chartDelegate := list.NewDefaultDelegate()
 	chartDelegate.Styles = delegate.Styles
@@ -575,7 +588,7 @@ func initialModel() model {
 	chartList.SetFilteringEnabled(true)
 	chartList.Styles.Title = titleStyle
 	chartList.Styles.FilterPrompt = searchInputStyle
-	chartList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	chartList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	versionDelegate := list.NewDefaultDelegate()
 	versionDelegate.Styles = delegate.Styles
@@ -585,7 +598,7 @@ func initialModel() model {
 	versionList.SetFilteringEnabled(true)
 	versionList.Styles.Title = titleStyle
 	versionList.Styles.FilterPrompt = searchInputStyle
-	versionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	versionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	valuesView := viewport.New(0, 0)
 	diffView := viewport.New(0, 0)
@@ -604,7 +617,7 @@ func initialModel() model {
 	ahPackageList.SetFilteringEnabled(true)
 	ahPackageList.Styles.Title = titleStyle
 	ahPackageList.Styles.FilterPrompt = searchInputStyle
-	ahPackageList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	ahPackageList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
 
 	ahVersionDelegate := list.NewDefaultDelegate()
 	ahVersionDelegate.Styles = delegate.Styles
@@ -614,19 +627,48 @@ func initialModel() model {
 	ahVersionList.SetFilteringEnabled(true)
 	ahVersionList.Styles.Title = titleStyle
 	ahVersionList.Styles.FilterPrompt = searchInputStyle
-	ahVersionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
+	ahVersionList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+
+	// Main Menu
+	menuItems := []list.Item{
+		listItem{title: "Browse Repositories", description: "Browse Helm repositories and charts"},
+		listItem{title: "Cluster Releases", description: "View and manage deployed Helm releases (Coming Soon)"},
+		listItem{title: "Settings", description: "Configure LazyHelm settings (Coming Soon)"},
+	}
+	mainMenuDelegate := list.NewDefaultDelegate()
+	mainMenuDelegate.Styles = delegate.Styles
+	mainMenu := list.New(menuItems, mainMenuDelegate, 0, 0)
+	mainMenu.Title = "LazyHelm"
+	mainMenu.SetShowStatusBar(false)
+	mainMenu.SetFilteringEnabled(false)
+	mainMenu.Styles.Title = titleStyle
+
+	// Browse Menu (submenu for Browse Repositories)
+	browseMenuItems := []list.Item{
+		listItem{title: "Local Repositories", description: "Browse your configured Helm repositories"},
+		listItem{title: "Search Artifact Hub", description: "Search charts on Artifact Hub"},
+	}
+	browseMenuDelegate := list.NewDefaultDelegate()
+	browseMenuDelegate.Styles = delegate.Styles
+	browseMenu := list.New(browseMenuItems, browseMenuDelegate, 0, 0)
+	browseMenu.Title = "Browse Repositories"
+	browseMenu.SetShowStatusBar(false)
+	browseMenu.SetFilteringEnabled(false)
+	browseMenu.Styles.Title = titleStyle
 
 	return model{
 		helmClient:        client,
 		cache:             cache,
 		chartCache:        make(map[string]chartCacheEntry),
 		versionCache:      make(map[string]versionCacheEntry),
-		state:             stateRepoList,
+		state:             stateMainMenu,
 		mode:              normalMode,
 		repos:             repos,
 		artifactHubClient: artifacthub.NewClient(),
 		ahPackageList:     ahPackageList,
 		ahVersionList:     ahVersionList,
+		mainMenu:          mainMenu,
+		browseMenu:        browseMenu,
 		repoList:          repoList,
 		chartList:         chartList,
 		versionList:       versionList,
@@ -655,6 +697,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h := msg.Height - 10
 		w := msg.Width - 4
 
+		m.mainMenu.SetSize(w/2, h)
+		m.browseMenu.SetSize(w/2, h)
 		m.repoList.SetSize(w/3, h)
 		m.chartList.SetSize(w/2, h)
 		m.versionList.SetSize(w/3, h)
@@ -722,12 +766,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.RemoveRepo):
 			if m.state == stateRepoList && len(m.repos) > 0 {
-				// Enter confirmation mode
-				m.mode = confirmRemoveRepoMode
-				idx := m.repoList.Index()
-				if idx < len(m.repos) {
+				// Enter confirmation mode - use selected item to handle filtered lists
+				selectedItem := m.repoList.SelectedItem()
+				if selectedItem != nil {
+					item := selectedItem.(listItem)
+					m.mode = confirmRemoveRepoMode
 					m.searchInput.Reset()
-					m.searchInput.Placeholder = fmt.Sprintf("Remove '%s'? (y/n)", m.repos[idx].Name)
+					m.searchInput.Placeholder = fmt.Sprintf("Remove '%s'? (y/n)", item.title)
 					m.searchInput.Focus()
 				}
 			}
@@ -1124,6 +1169,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.state {
+	case stateMainMenu:
+		m.mainMenu, cmd = m.mainMenu.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateBrowseMenu:
+		m.browseMenu, cmd = m.browseMenu.Update(msg)
+		cmds = append(cmds, cmd)
 	case stateRepoList:
 		m.repoList, cmd = m.repoList.Update(msg)
 		cmds = append(cmds, cmd)
@@ -1166,6 +1217,10 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	}
 
 	switch m.state {
+	case stateBrowseMenu:
+		m.state = stateMainMenu
+	case stateRepoList:
+		m.state = stateBrowseMenu
 	case stateChartList:
 		m.state = stateRepoList
 		m.charts = nil
@@ -1181,7 +1236,7 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 	case stateDiffViewer:
 		m.state = stateChartDetail
 	case stateArtifactHubSearch:
-		m.state = stateRepoList
+		m.state = stateBrowseMenu
 		m.ahPackages = nil
 		m.ahPackageList.SetItems([]list.Item{})
 	case stateArtifactHubPackageDetail:
@@ -1199,6 +1254,39 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 	m.successMsg = ""
 
 	switch m.state {
+	case stateMainMenu:
+		selectedItem := m.mainMenu.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			switch item.title {
+			case "Browse Repositories":
+				m.state = stateBrowseMenu
+				return m, nil
+			case "Cluster Releases":
+				return m, m.setSuccessMsg("Feature coming soon!")
+			case "Settings":
+				return m, m.setSuccessMsg("Feature coming soon!")
+			}
+		}
+
+	case stateBrowseMenu:
+		selectedItem := m.browseMenu.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			switch item.title {
+			case "Local Repositories":
+				m.state = stateRepoList
+				return m, nil
+			case "Search Artifact Hub":
+				m.mode = searchMode
+				m.searchInput.Reset()
+				m.searchInput.Placeholder = "Search Artifact Hub..."
+				m.searchInput.Focus()
+				m.state = stateArtifactHubSearch
+				return m, nil
+			}
+		}
+
 	case stateRepoList:
 		selectedItem := m.repoList.SelectedItem()
 		if selectedItem != nil {
@@ -1548,10 +1636,11 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.Blur()
 
 			if response == "y" || response == "yes" {
-				// Remove the repository
-				idx := m.repoList.Index()
-				if idx < len(m.repos) {
-					repoName := m.repos[idx].Name
+				// Remove the repository - use selected item to handle filtered lists
+				selectedItem := m.repoList.SelectedItem()
+				if selectedItem != nil {
+					item := selectedItem.(listItem)
+					repoName := item.title
 					return m, func() tea.Msg {
 						err := m.helmClient.RemoveRepository(repoName)
 						if err != nil {
@@ -1791,7 +1880,7 @@ func (m *model) updateValuesViewWithSearch() {
 
 		// Add continuation indicator if line continues
 		if hasMore {
-			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
+			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
 			highlighted += arrowStyle.Render(" →")
 		}
 
@@ -1867,6 +1956,10 @@ func (m model) View() string {
 	}
 
 	switch m.state {
+	case stateMainMenu:
+		content += m.renderMainMenu()
+	case stateBrowseMenu:
+		content += m.renderBrowseMenu()
 	case stateRepoList:
 		content += m.renderRepoList()
 	case stateChartList:
@@ -1981,6 +2074,14 @@ func (m model) getBreadcrumb() string {
 	}
 
 	return strings.Join(parts, " > ")
+}
+
+func (m model) renderMainMenu() string {
+	return activePanelStyle.Render(m.mainMenu.View())
+}
+
+func (m model) renderBrowseMenu() string {
+	return activePanelStyle.Render(m.browseMenu.View())
 }
 
 func (m model) renderRepoList() string {
@@ -2241,7 +2342,7 @@ func (m model) renderArtifactHubPackageDetail() string {
 	info := lipgloss.NewStyle().
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("33")).
+		BorderForeground(lipgloss.Color("141")).
 		Width(m.termWidth - 8).
 		Render(fmt.Sprintf(
 			"%s %s\n\n"+
