@@ -68,6 +68,17 @@ release:
   footer: |
     ## Installation
 
+    ### Homebrew (macOS/Linux)
+    ```bash
+    brew tap alessandropitocchi/lazyhelm
+    brew install lazyhelm
+    ```
+
+    Or in one command:
+    ```bash
+    brew install alessandropitocchi/lazyhelm/lazyhelm
+    ```
+
     ### Using Go
     ```bash
     go install github.com/alessandropitocchi/lazyhelm/cmd/lazyhelm@{{.Tag}}
