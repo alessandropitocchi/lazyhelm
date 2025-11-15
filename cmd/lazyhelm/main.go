@@ -136,6 +136,12 @@ const (
 	stateArtifactHubSearch
 	stateArtifactHubPackageDetail
 	stateArtifactHubVersions
+	stateClusterReleasesMenu
+	stateNamespaceList
+	stateReleaseList
+	stateReleaseDetail
+	stateReleaseHistory
+	stateReleaseValues
 )
 
 type inputMode int
@@ -188,8 +194,23 @@ type model struct {
 	ahSelectedVersion  int
 	ahLoading          bool
 
-	mainMenu     list.Model
-	browseMenu   list.Model
+	// Cluster Releases
+	releases           []helm.Release
+	namespaces         []string
+	selectedRelease    int
+	selectedNamespace  string
+	releaseHistory     []helm.ReleaseRevision
+	releaseValues      string
+	releaseValuesLines []string
+	releaseStatus      *helm.ReleaseStatus
+
+	mainMenu              list.Model
+	browseMenu            list.Model
+	clusterReleasesMenu   list.Model
+	namespaceList         list.Model
+	releaseList           list.Model
+	releaseHistoryList    list.Model
+	releaseValuesView     viewport.Model
 	repoList     list.Model
 	chartList    list.Model
 	versionList  list.Model
@@ -637,7 +658,7 @@ func initialModel() model {
 	// Main Menu
 	menuItems := []list.Item{
 		listItem{title: "Browse Repositories", description: "Browse Helm repositories and charts"},
-		listItem{title: "Cluster Releases", description: "View and manage deployed Helm releases (Coming Soon)"},
+		listItem{title: "Cluster Releases", description: "View deployed Helm releases"},
 		listItem{title: "Settings", description: "Configure LazyHelm settings (Coming Soon)"},
 	}
 	mainMenuDelegate := list.NewDefaultDelegate()
@@ -661,6 +682,53 @@ func initialModel() model {
 	browseMenu.SetFilteringEnabled(false)
 	browseMenu.Styles.Title = titleStyle
 
+	// Cluster Releases Menu
+	clusterReleasesMenuItems := []list.Item{
+		listItem{title: "All Namespaces", description: "View releases from all namespaces"},
+		listItem{title: "Select Namespace", description: "Choose a specific namespace"},
+	}
+	clusterReleasesMenuDelegate := list.NewDefaultDelegate()
+	clusterReleasesMenuDelegate.Styles = delegate.Styles
+	clusterReleasesMenu := list.New(clusterReleasesMenuItems, clusterReleasesMenuDelegate, 0, 0)
+	clusterReleasesMenu.Title = "Cluster Releases"
+	clusterReleasesMenu.SetShowStatusBar(false)
+	clusterReleasesMenu.SetFilteringEnabled(false)
+	clusterReleasesMenu.Styles.Title = titleStyle
+
+	// Namespace List
+	namespaceDelegate := list.NewDefaultDelegate()
+	namespaceDelegate.Styles = delegate.Styles
+	namespaceList := list.New([]list.Item{}, namespaceDelegate, 0, 0)
+	namespaceList.Title = "Namespaces"
+	namespaceList.SetShowStatusBar(false)
+	namespaceList.SetFilteringEnabled(true)
+	namespaceList.Styles.Title = titleStyle
+	namespaceList.Styles.FilterPrompt = searchInputStyle
+	namespaceList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+
+	// Release List
+	releaseDelegate := list.NewDefaultDelegate()
+	releaseDelegate.Styles = delegate.Styles
+	releaseList := list.New([]list.Item{}, releaseDelegate, 0, 0)
+	releaseList.Title = "Releases"
+	releaseList.SetShowStatusBar(false)
+	releaseList.SetFilteringEnabled(true)
+	releaseList.Styles.Title = titleStyle
+	releaseList.Styles.FilterPrompt = searchInputStyle
+	releaseList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+
+	// Release History List
+	releaseHistoryDelegate := list.NewDefaultDelegate()
+	releaseHistoryDelegate.Styles = delegate.Styles
+	releaseHistoryList := list.New([]list.Item{}, releaseHistoryDelegate, 0, 0)
+	releaseHistoryList.Title = "Release History"
+	releaseHistoryList.SetShowStatusBar(false)
+	releaseHistoryList.SetFilteringEnabled(false)
+	releaseHistoryList.Styles.Title = titleStyle
+
+	// Release Values View
+	releaseValuesView := viewport.New(0, 0)
+
 	return model{
 		helmClient:        client,
 		cache:             cache,
@@ -669,12 +737,17 @@ func initialModel() model {
 		state:             stateMainMenu,
 		mode:              normalMode,
 		repos:             repos,
-		artifactHubClient: artifacthub.NewClient(),
-		ahPackageList:     ahPackageList,
-		ahVersionList:     ahVersionList,
-		mainMenu:          mainMenu,
-		browseMenu:        browseMenu,
-		repoList:          repoList,
+		artifactHubClient:     artifacthub.NewClient(),
+		ahPackageList:         ahPackageList,
+		ahVersionList:         ahVersionList,
+		mainMenu:              mainMenu,
+		browseMenu:            browseMenu,
+		clusterReleasesMenu:   clusterReleasesMenu,
+		namespaceList:         namespaceList,
+		releaseList:           releaseList,
+		releaseHistoryList:    releaseHistoryList,
+		releaseValuesView:     releaseValuesView,
+		repoList:              repoList,
 		chartList:         chartList,
 		versionList:       versionList,
 		valuesView:        valuesView,
@@ -712,12 +785,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ahPackageList.SetSize(w-4, h)
 		m.ahVersionList.SetSize(w/3, h)
 
+		// Cluster Releases lists
+		m.clusterReleasesMenu.SetSize(w/2, h)
+		m.namespaceList.SetSize(w/3, h)
+		m.releaseList.SetSize(w-4, h)
+		m.releaseHistoryList.SetSize(w/3, h)
+
 		// Values view takes full screen
 		m.valuesView.Width = msg.Width - 6  // Full width minus border padding
 		m.valuesView.Height = msg.Height - 8 // Full height minus header/footer
 
 		m.diffView.Width = msg.Width - 6
 		m.diffView.Height = msg.Height - 8
+
+		m.releaseValuesView.Width = msg.Width - 6
+		m.releaseValuesView.Height = msg.Height - 8
 
 		return m, nil
 
@@ -1285,7 +1367,8 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 				m.state = stateBrowseMenu
 				return m, nil
 			case "Cluster Releases":
-				return m, m.setSuccessMsg("Feature coming soon!")
+				m.state = stateClusterReleasesMenu
+				return m, nil
 			case "Settings":
 				return m, m.setSuccessMsg("Feature coming soon!")
 			}
@@ -1307,6 +1390,33 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 				m.state = stateArtifactHubSearch
 				return m, nil
 			}
+		}
+
+	case stateClusterReleasesMenu:
+		selectedItem := m.clusterReleasesMenu.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			switch item.title {
+			case "All Namespaces":
+				m.state = stateReleaseList
+				m.selectedNamespace = "" // Empty means all namespaces
+				m.loading = true
+				return m, loadReleases(m.helmClient, "")
+			case "Select Namespace":
+				m.state = stateNamespaceList
+				m.loading = true
+				return m, loadNamespaces(m.helmClient)
+			}
+		}
+
+	case stateNamespaceList:
+		selectedItem := m.namespaceList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			m.selectedNamespace = item.title
+			m.state = stateReleaseList
+			m.loading = true
+			return m, loadReleases(m.helmClient, item.title)
 		}
 
 	case stateRepoList:

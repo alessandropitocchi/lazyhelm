@@ -10,7 +10,19 @@ A terminal UI for browsing and managing Helm charts. Inspired by lazygit and laz
 
 ## What it does
 
-Browse Helm repos, explore chart versions, view and edit values files, and compare versions - all in your terminal. No need to remember helm commands or manually fetch values.
+LazyHelm brings an intuitive, lazygit-style interface to Helm chart management:
+
+- **Navigate with ease** - Organized menu system to browse local repositories or search Artifact Hub
+- **Explore charts** - Browse your configured Helm repos and discover all available charts
+- **Search globally** - Find charts across Artifact Hub directly from the terminal
+- **Manage repositories** - Add, remove, and update repository indexes with simple keystrokes
+- **View & compare** - Inspect chart values with syntax highlighting and diff between versions
+- **Edit efficiently** - Modify values in your preferred editor ($EDITOR) with YAML validation
+- **Search & filter** - Fuzzy search through repositories, charts, and values
+- **Copy & export** - Copy YAML paths to clipboard or export values to files
+- **Preview templates** - Generate Helm templates to see what will be deployed
+
+All in your terminal. No need to remember helm commands or manually fetch values.
 
 ## Features
 

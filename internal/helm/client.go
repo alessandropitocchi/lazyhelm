@@ -221,3 +221,192 @@ func (c *Client) UpdateRepository(name string) error {
 	}
 	return nil
 }
+
+// Cluster Releases functionality
+
+type Release struct {
+	Name       string
+	Namespace  string
+	Revision   string
+	Updated    string
+	Status     string
+	Chart      string
+	AppVersion string
+}
+
+type ReleaseRevision struct {
+	Revision    int
+	Updated     string
+	Status      string
+	Chart       string
+	AppVersion  string
+	Description string
+}
+
+type ReleaseStatus struct {
+	Name        string
+	Namespace   string
+	Status      string
+	Description string
+	Notes       string
+}
+
+// ListReleases lists all Helm releases in the specified namespace
+// If namespace is empty, lists releases from all namespaces
+func (c *Client) ListReleases(namespace string) ([]Release, error) {
+	args := []string{"list", "--output", "json"}
+	if namespace == "" {
+		args = append(args, "-A") // All namespaces
+	} else {
+		args = append(args, "-n", namespace)
+	}
+
+	cmd := exec.Command("helm", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("helm list failed: %w\nOutput: %s", err, string(output))
+	}
+
+	var results []struct {
+		Name       string `json:"name"`
+		Namespace  string `json:"namespace"`
+		Revision   string `json:"revision"`
+		Updated    string `json:"updated"`
+		Status     string `json:"status"`
+		Chart      string `json:"chart"`
+		AppVersion string `json:"app_version"`
+	}
+
+	if err := json.Unmarshal(output, &results); err != nil {
+		return nil, err
+	}
+
+	releases := make([]Release, len(results))
+	for i, r := range results {
+		releases[i] = Release{
+			Name:       r.Name,
+			Namespace:  r.Namespace,
+			Revision:   r.Revision,
+			Updated:    r.Updated,
+			Status:     r.Status,
+			Chart:      r.Chart,
+			AppVersion: r.AppVersion,
+		}
+	}
+
+	return releases, nil
+}
+
+// ListNamespaces returns a list of namespaces that have Helm releases
+func (c *Client) ListNamespaces() ([]string, error) {
+	// Get all releases to extract unique namespaces
+	releases, err := c.ListReleases("")
+	if err != nil {
+		return nil, err
+	}
+
+	namespaceMap := make(map[string]bool)
+	for _, r := range releases {
+		namespaceMap[r.Namespace] = true
+	}
+
+	namespaces := make([]string, 0, len(namespaceMap))
+	for ns := range namespaceMap {
+		namespaces = append(namespaces, ns)
+	}
+
+	return namespaces, nil
+}
+
+// GetReleaseHistory returns the revision history of a release
+func (c *Client) GetReleaseHistory(releaseName, namespace string) ([]ReleaseRevision, error) {
+	args := []string{"history", releaseName, "--output", "json"}
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+
+	cmd := exec.Command("helm", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("helm history failed: %w\nOutput: %s", err, string(output))
+	}
+
+	var results []struct {
+		Revision    int    `json:"revision"`
+		Updated     string `json:"updated"`
+		Status      string `json:"status"`
+		Chart       string `json:"chart"`
+		AppVersion  string `json:"app_version"`
+		Description string `json:"description"`
+	}
+
+	if err := json.Unmarshal(output, &results); err != nil {
+		return nil, err
+	}
+
+	revisions := make([]ReleaseRevision, len(results))
+	for i, r := range results {
+		revisions[i] = ReleaseRevision{
+			Revision:    r.Revision,
+			Updated:     r.Updated,
+			Status:      r.Status,
+			Chart:       r.Chart,
+			AppVersion:  r.AppVersion,
+			Description: r.Description,
+		}
+	}
+
+	return revisions, nil
+}
+
+// GetReleaseValues returns the values used for a specific release
+func (c *Client) GetReleaseValues(releaseName, namespace string) (string, error) {
+	args := []string{"get", "values", releaseName}
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+
+	cmd := exec.Command("helm", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("helm get values failed: %w\nOutput: %s", err, string(output))
+	}
+
+	return string(output), nil
+}
+
+// GetReleaseStatus returns the status of a release
+func (c *Client) GetReleaseStatus(releaseName, namespace string) (*ReleaseStatus, error) {
+	args := []string{"status", releaseName, "--output", "json"}
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+
+	cmd := exec.Command("helm", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("helm status failed: %w\nOutput: %s", err, string(output))
+	}
+
+	var result struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+		Info      struct {
+			Status      string `json:"status"`
+			Description string `json:"description"`
+			Notes       string `json:"notes"`
+		} `json:"info"`
+	}
+
+	if err := json.Unmarshal(output, &result); err != nil {
+		return nil, err
+	}
+
+	return &ReleaseStatus{
+		Name:        result.Name,
+		Namespace:   result.Namespace,
+		Status:      result.Info.Status,
+		Description: result.Info.Description,
+		Notes:       result.Info.Notes,
+	}, nil
+}
