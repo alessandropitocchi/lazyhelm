@@ -1146,7 +1146,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Horizontal scroll in value viewers
-			if m.state == stateValueViewer || m.state == stateReleaseValues {
+			if m.state == stateValueViewer {
 				if m.horizontalOffset > 0 {
 					m.horizontalOffset -= 5 // Scroll by 5 characters
 					if m.horizontalOffset < 0 {
@@ -1154,13 +1154,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.updateValuesViewWithSearch()
 				}
+			} else if m.state == stateReleaseValues {
+				if m.horizontalOffset > 0 {
+					m.horizontalOffset -= 5 // Scroll by 5 characters
+					if m.horizontalOffset < 0 {
+						m.horizontalOffset = 0
+					}
+					m.updateReleaseValuesViewWithSearch()
+				}
 			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Right):
-			if m.state == stateValueViewer || m.state == stateReleaseValues {
+			if m.state == stateValueViewer {
 				m.horizontalOffset += 5 // Scroll by 5 characters
 				m.updateValuesViewWithSearch()
+			} else if m.state == stateReleaseValues {
+				m.horizontalOffset += 5 // Scroll by 5 characters
+				m.updateReleaseValuesViewWithSearch()
 			}
 			return m, nil
 		}
@@ -1783,7 +1794,7 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleSearch() (tea.Model, tea.Cmd) {
-	if m.state == stateRepoList || m.state == stateChartList || m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateDiffViewer {
+	if m.state == stateRepoList || m.state == stateChartList || m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateDiffViewer || m.state == stateReleaseValues {
 		m.successMsg = "" // Clear success message
 		m.mode = searchMode
 		m.searchInput.Reset()
@@ -1855,6 +1866,11 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.versionList.SetItems(items)
 
 			case stateValueViewer:
+				// Clear search results
+				m.searchMatches = []int{}
+				m.lastSearchQuery = ""
+
+			case stateReleaseValues:
 				// Clear search results
 				m.searchMatches = []int{}
 				m.lastSearchQuery = ""
@@ -2107,6 +2123,31 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.valuesView.YOffset = targetLine
 			}
 
+		case stateReleaseValues:
+			// Find all matches in release values
+			m.searchMatches = []int{}
+			m.lastSearchQuery = query
+			for i, line := range m.releaseValuesLines {
+				if strings.Contains(strings.ToLower(line), query) {
+					m.searchMatches = append(m.searchMatches, i)
+				}
+			}
+
+			// Update the view with highlighted search terms
+			m.updateReleaseValuesViewWithSearch()
+
+			// Jump to first match
+			if len(m.searchMatches) > 0 {
+				m.currentMatchIndex = 0
+				targetLine := m.searchMatches[0]
+				if targetLine > m.releaseValuesView.Height/2 {
+					targetLine = targetLine - m.releaseValuesView.Height/2
+				} else {
+					targetLine = 0
+				}
+				m.releaseValuesView.YOffset = targetLine
+			}
+
 		case stateDiffViewer:
 			// Find all matches in diff
 			m.searchMatches = []int{}
@@ -2174,6 +2215,12 @@ func (m model) jumpToMatch() model {
 			m.valuesView.YOffset = targetLine - m.valuesView.Height/2
 		} else {
 			m.valuesView.YOffset = 0
+		}
+	} else if m.state == stateReleaseValues {
+		if targetLine > m.releaseValuesView.Height/2 {
+			m.releaseValuesView.YOffset = targetLine - m.releaseValuesView.Height/2
+		} else {
+			m.releaseValuesView.YOffset = 0
 		}
 	} else if m.state == stateDiffViewer {
 		if targetLine > m.diffView.Height/2 {
@@ -2260,6 +2307,80 @@ func (m *model) updateValuesViewWithSearch() {
 	m.valuesView.SetContent(strings.Join(highlightedLines, "\n"))
 }
 
+func (m *model) updateReleaseValuesViewWithSearch() {
+	lines := strings.Split(m.releaseValues, "\n")
+	viewportWidth := m.releaseValuesView.Width
+	if viewportWidth <= 0 {
+		viewportWidth = m.termWidth - 6 // Default to full screen minus borders/padding
+	}
+
+	// Get the current match line (only this one should be highlighted)
+	var currentMatchLine int = -1
+	if len(m.searchMatches) > 0 && m.currentMatchIndex < len(m.searchMatches) {
+		currentMatchLine = m.searchMatches[m.currentMatchIndex]
+	}
+
+	query := strings.ToLower(m.lastSearchQuery)
+	highlightedLines := make([]string, len(lines))
+
+	for i, line := range lines {
+		// Apply horizontal scrolling
+		visibleLine := line
+		hasMore := false
+
+		// Calculate actual display width considering the line content
+		if len(line) > m.horizontalOffset {
+			visibleLine = line[m.horizontalOffset:]
+
+			// Truncate if longer than viewport width
+			if len(visibleLine) > viewportWidth-3 { // -3 for indicator
+				visibleLine = visibleLine[:viewportWidth-3]
+				hasMore = true
+			}
+		} else {
+			visibleLine = ""
+		}
+
+		// Apply syntax highlighting
+		var highlighted string
+		// Only highlight if this is THE CURRENT match (not all matches)
+		if i == currentMatchLine && query != "" {
+			// This line is the CURRENT match - find and highlight it
+			lowerLine := strings.ToLower(visibleLine)
+			idx := strings.Index(lowerLine, query)
+			if idx >= 0 && idx+len(query) <= len(visibleLine) {
+				// Split the line into 3 parts
+				before := visibleLine[:idx]
+				match := visibleLine[idx : idx+len(query)]
+				after := visibleLine[idx+len(query):]
+
+				// Apply YAML highlighting to before and after, but not to match
+				beforeHighlighted := ui.HighlightYAMLLine(before)
+				afterHighlighted := ui.HighlightYAMLLine(after)
+				matchHighlighted := highlightStyle.Render(match)
+
+				highlighted = beforeHighlighted + matchHighlighted + afterHighlighted
+			} else {
+				// Fallback to normal highlighting if match not found in visible portion
+				highlighted = ui.HighlightYAMLLine(visibleLine)
+			}
+		} else {
+			// Normal line - just apply YAML highlighting
+			highlighted = ui.HighlightYAMLLine(visibleLine)
+		}
+
+		// Add continuation indicator if line continues
+		if hasMore {
+			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
+			highlighted += arrowStyle.Render(" →")
+		}
+
+		highlightedLines[i] = highlighted
+	}
+
+	m.releaseValuesView.SetContent(strings.Join(highlightedLines, "\n"))
+}
+
 func (m *model) updateDiffViewWithSearch() {
 	if len(m.diffLines) == 0 {
 		return
@@ -2321,7 +2442,7 @@ func (m model) View() string {
 	}
 
 	// Show search info AFTER breadcrumb for better visibility
-	if (m.state == stateValueViewer || m.state == stateDiffViewer) && len(m.searchMatches) > 0 {
+	if (m.state == stateValueViewer || m.state == stateReleaseValues || m.state == stateDiffViewer) && len(m.searchMatches) > 0 {
 		content += m.renderSearchHeader() + "\n"
 	}
 
@@ -2394,6 +2515,20 @@ func (m model) renderSearchHeader() string {
 			header += pathStyle.Render(" " + yamlPath + " ")
 		} else if matchLine < len(m.valuesLines) {
 			lineContent := strings.TrimSpace(m.valuesLines[matchLine])
+			if len(lineContent) > 60 {
+				lineContent = lineContent[:60] + "..."
+			}
+			header += pathStyle.Render(fmt.Sprintf(" Line %d: %s ", matchLine+1, lineContent))
+		}
+		header += " " + helpStyle.Render("n=next N=prev y=copy")
+	} else if m.state == stateReleaseValues {
+		matchLine := m.searchMatches[m.currentMatchIndex]
+		yamlPath := ui.GetYAMLPath(m.releaseValuesLines, matchLine)
+
+		if yamlPath != "" {
+			header += pathStyle.Render(" " + yamlPath + " ")
+		} else if matchLine < len(m.releaseValuesLines) {
+			lineContent := strings.TrimSpace(m.releaseValuesLines[matchLine])
 			if len(lineContent) > 60 {
 				lineContent = lineContent[:60] + "..."
 			}
