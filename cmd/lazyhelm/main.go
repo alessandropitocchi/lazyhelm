@@ -414,6 +414,31 @@ type editorFinishedMsg struct {
 	err      error
 }
 
+type releasesLoadedMsg struct {
+	releases []helm.Release
+	err      error
+}
+
+type namespacesLoadedMsg struct {
+	namespaces []string
+	err        error
+}
+
+type releaseHistoryLoadedMsg struct {
+	history []helm.ReleaseRevision
+	err     error
+}
+
+type releaseValuesLoadedMsg struct {
+	values string
+	err    error
+}
+
+type releaseStatusLoadedMsg struct {
+	status *helm.ReleaseStatus
+	err    error
+}
+
 type artifactHubSearchMsg struct {
 	packages []artifacthub.Package
 	err      error
@@ -500,6 +525,41 @@ func loadVersions(client *helm.Client, versionCache map[string]versionCacheEntry
 			}
 		}
 		return versionsLoadedMsg{versions: versions, err: err}
+	}
+}
+
+func loadReleases(client *helm.Client, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		releases, err := client.ListReleases(namespace)
+		return releasesLoadedMsg{releases: releases, err: err}
+	}
+}
+
+func loadNamespaces(client *helm.Client) tea.Cmd {
+	return func() tea.Msg {
+		namespaces, err := client.ListNamespaces()
+		return namespacesLoadedMsg{namespaces: namespaces, err: err}
+	}
+}
+
+func loadReleaseHistory(client *helm.Client, releaseName, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		history, err := client.GetReleaseHistory(releaseName, namespace)
+		return releaseHistoryLoadedMsg{history: history, err: err}
+	}
+}
+
+func loadReleaseValues(client *helm.Client, releaseName, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		values, err := client.GetReleaseValues(releaseName, namespace)
+		return releaseValuesLoadedMsg{values: values, err: err}
+	}
+}
+
+func loadReleaseStatus(client *helm.Client, releaseName, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		status, err := client.GetReleaseStatus(releaseName, namespace)
+		return releaseStatusLoadedMsg{status: status, err: err}
 	}
 }
 
@@ -985,6 +1045,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
 				m.state = stateArtifactHubVersions
 			}
+			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) {
+				release := m.releases[m.selectedRelease]
+				m.state = stateReleaseValues
+				m.loadingVals = true
+				return m, loadReleaseValues(m.helmClient, release.Name, release.Namespace)
+			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Copy):
@@ -1270,6 +1336,85 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clearSuccessMsgMsg:
 		m.successMsg = ""
 		return m, nil
+
+	case releasesLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releases = msg.releases
+		items := make([]list.Item, len(msg.releases))
+		for i, release := range msg.releases {
+			desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+			items[i] = listItem{
+				title:       release.Name,
+				description: desc,
+			}
+		}
+		m.releaseList.SetItems(items)
+		return m, nil
+
+	case namespacesLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.namespaces = msg.namespaces
+		items := make([]list.Item, len(msg.namespaces))
+		for i, ns := range msg.namespaces {
+			items[i] = listItem{
+				title:       ns,
+				description: "Kubernetes namespace",
+			}
+		}
+		m.namespaceList.SetItems(items)
+		return m, nil
+
+	case releaseHistoryLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releaseHistory = msg.history
+		items := make([]list.Item, len(msg.history))
+		for i, rev := range msg.history {
+			desc := fmt.Sprintf("%s | %s | %s", rev.Status, rev.Chart, rev.Updated)
+			items[i] = listItem{
+				title:       fmt.Sprintf("Revision %d", rev.Revision),
+				description: desc,
+			}
+		}
+		m.releaseHistoryList.SetItems(items)
+		return m, nil
+
+	case releaseValuesLoadedMsg:
+		m.loadingVals = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releaseValues = msg.values
+		m.releaseValuesLines = strings.Split(msg.values, "\n")
+		highlighted := ui.HighlightYAMLContent(msg.values)
+		m.releaseValuesView.SetContent(highlighted)
+		return m, nil
+
+	case releaseStatusLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releaseStatus = msg.status
+		return m, nil
 	}
 
 	switch m.state {
@@ -1302,6 +1447,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	case stateArtifactHubVersions:
 		m.ahVersionList, cmd = m.ahVersionList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateClusterReleasesMenu:
+		m.clusterReleasesMenu, cmd = m.clusterReleasesMenu.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateNamespaceList:
+		m.namespaceList, cmd = m.namespaceList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseList:
+		m.releaseList, cmd = m.releaseList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseDetail:
+		m.releaseHistoryList, cmd = m.releaseHistoryList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseHistory:
+		m.releaseHistoryList, cmd = m.releaseHistoryList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseValues:
+		m.releaseValuesView, cmd = m.releaseValuesView.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -1349,6 +1512,32 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.ahVersionList.SetItems([]list.Item{})
 	case stateArtifactHubVersions:
 		m.state = stateArtifactHubPackageDetail
+	case stateClusterReleasesMenu:
+		m.state = stateMainMenu
+	case stateNamespaceList:
+		m.state = stateClusterReleasesMenu
+		m.namespaces = nil
+		m.namespaceList.SetItems([]list.Item{})
+	case stateReleaseList:
+		if m.selectedNamespace == "" {
+			// Came from "All Namespaces"
+			m.state = stateClusterReleasesMenu
+		} else {
+			// Came from "Select Namespace"
+			m.state = stateNamespaceList
+		}
+		m.releases = nil
+		m.releaseList.SetItems([]list.Item{})
+	case stateReleaseDetail:
+		m.state = stateReleaseList
+	case stateReleaseHistory:
+		m.state = stateReleaseDetail
+		m.releaseHistory = nil
+		m.releaseHistoryList.SetItems([]list.Item{})
+	case stateReleaseValues:
+		m.state = stateReleaseDetail
+		m.releaseValues = ""
+		m.releaseValuesLines = nil
 	}
 	return m, nil
 }
@@ -1417,6 +1606,25 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 			m.state = stateReleaseList
 			m.loading = true
 			return m, loadReleases(m.helmClient, item.title)
+		}
+
+	case stateReleaseList:
+		selectedItem := m.releaseList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			// Find the release by name
+			for i, release := range m.releases {
+				if release.Name == item.title {
+					m.selectedRelease = i
+					m.state = stateReleaseDetail
+					m.loading = true
+					// Load both history and status for the detail view
+					return m, tea.Batch(
+						loadReleaseHistory(m.helmClient, release.Name, release.Namespace),
+						loadReleaseStatus(m.helmClient, release.Name, release.Namespace),
+					)
+				}
+			}
 		}
 
 	case stateRepoList:
@@ -2108,6 +2316,18 @@ func (m model) View() string {
 		content += m.renderArtifactHubPackageDetail()
 	case stateArtifactHubVersions:
 		content += m.renderArtifactHubVersions()
+	case stateClusterReleasesMenu:
+		content += m.renderClusterReleasesMenu()
+	case stateNamespaceList:
+		content += m.renderNamespaceList()
+	case stateReleaseList:
+		content += m.renderReleaseList()
+	case stateReleaseDetail:
+		content += m.renderReleaseDetail()
+	case stateReleaseHistory:
+		content += m.renderReleaseHistory()
+	case stateReleaseValues:
+		content += m.renderReleaseValues()
 	}
 
 	footer := "\n"
@@ -2167,6 +2387,29 @@ func (m model) renderSearchHeader() string {
 
 func (m model) getBreadcrumb() string {
 	parts := []string{"LazyHelm"}
+
+	// Cluster Releases navigation
+	if m.state >= stateClusterReleasesMenu && m.state <= stateReleaseValues {
+		parts = append(parts, "Cluster Releases")
+
+		if m.state == stateNamespaceList {
+			parts = append(parts, "Select Namespace")
+		}
+
+		if m.state >= stateReleaseList && m.selectedNamespace != "" {
+			parts = append(parts, m.selectedNamespace)
+		}
+
+		if m.state >= stateReleaseList && m.selectedRelease < len(m.releases) {
+			parts = append(parts, m.releases[m.selectedRelease].Name)
+		}
+
+		if m.state == stateReleaseValues {
+			parts = append(parts, "values")
+		}
+
+		return strings.Join(parts, " > ")
+	}
 
 	// Artifact Hub navigation
 	if m.state == stateArtifactHubSearch {
@@ -2516,6 +2759,108 @@ func (m model) renderArtifactHubVersions() string {
 
 	hint := "\n" + helpStyle.Render("  a: add repository to view values | esc: back  ")
 	return activePanelStyle.Render(m.ahVersionList.View()) + hint
+}
+
+func (m model) renderClusterReleasesMenu() string {
+	return activePanelStyle.Render(m.clusterReleasesMenu.View())
+}
+
+func (m model) renderNamespaceList() string {
+	if m.loading {
+		return "Loading namespaces..."
+	}
+	if len(m.namespaces) == 0 {
+		return "No namespaces with Helm releases found."
+	}
+	return activePanelStyle.Render(m.namespaceList.View())
+}
+
+func (m model) renderReleaseList() string {
+	if m.loading {
+		return "Loading releases..."
+	}
+	if len(m.releases) == 0 {
+		return "No releases found."
+	}
+
+	var header string
+	if m.selectedNamespace == "" {
+		header = infoStyle.Render(" Showing releases from all namespaces ") + "\n\n"
+	} else {
+		header = infoStyle.Render(fmt.Sprintf(" Namespace: %s ", m.selectedNamespace)) + "\n\n"
+	}
+
+	return header + activePanelStyle.Render(m.releaseList.View())
+}
+
+func (m model) renderReleaseDetail() string {
+	if m.loading {
+		return activePanelStyle.Render("Loading release details...")
+	}
+
+	if m.selectedRelease >= len(m.releases) {
+		return activePanelStyle.Render("No release selected.")
+	}
+
+	release := m.releases[m.selectedRelease]
+
+	var content strings.Builder
+
+	// Release header
+	content.WriteString(infoStyle.Render(fmt.Sprintf(" Release: %s ", release.Name)) + "\n\n")
+
+	// Status section
+	if m.releaseStatus != nil {
+		content.WriteString("Status: " + m.releaseStatus.Status + "\n")
+		if m.releaseStatus.Description != "" {
+			content.WriteString("Description: " + m.releaseStatus.Description + "\n")
+		}
+		content.WriteString("\n")
+	}
+
+	// Release info
+	content.WriteString(fmt.Sprintf("Namespace:  %s\n", release.Namespace))
+	content.WriteString(fmt.Sprintf("Chart:      %s\n", release.Chart))
+	content.WriteString(fmt.Sprintf("App Version: %s\n", release.AppVersion))
+	content.WriteString(fmt.Sprintf("Updated:    %s\n", release.Updated))
+	content.WriteString("\n")
+
+	// History section
+	content.WriteString("Revision History:\n")
+	if len(m.releaseHistory) > 0 {
+		for _, rev := range m.releaseHistory {
+			revStr := fmt.Sprintf("  Revision %d - %s (%s) - %s\n",
+				rev.Revision, rev.Status, rev.Chart, rev.Updated)
+			content.WriteString(revStr)
+		}
+	} else {
+		content.WriteString("  Loading...\n")
+	}
+
+	content.WriteString("\n")
+	content.WriteString(helpStyle.Render("  Press 'v' to view values | esc: back  "))
+
+	return activePanelStyle.Render(content.String())
+}
+
+func (m model) renderReleaseHistory() string {
+	if m.loading {
+		return activePanelStyle.Render("Loading revision history...")
+	}
+	if len(m.releaseHistory) == 0 {
+		return activePanelStyle.Render("No revision history found.")
+	}
+	return activePanelStyle.Render(m.releaseHistoryList.View())
+}
+
+func (m model) renderReleaseValues() string {
+	if m.loadingVals {
+		return activePanelStyle.Render("Loading values...")
+	}
+	if m.releaseValues == "" {
+		return activePanelStyle.Render("No values available.")
+	}
+	return activePanelStyle.Render(m.releaseValuesView.View())
 }
 
 func main() {
