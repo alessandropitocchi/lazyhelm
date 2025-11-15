@@ -198,6 +198,7 @@ type model struct {
 	releases           []helm.Release
 	namespaces         []string
 	selectedRelease    int
+	selectedRevision   int
 	selectedNamespace  string
 	releaseHistory     []helm.ReleaseRevision
 	releaseValues      string
@@ -1139,7 +1140,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Left):
-			if m.state == stateValueViewer {
+			// 'h' for history in release detail view
+			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) {
+				m.state = stateReleaseHistory
+				return m, nil
+			}
+			// Horizontal scroll in value viewers
+			if m.state == stateValueViewer || m.state == stateReleaseValues {
 				if m.horizontalOffset > 0 {
 					m.horizontalOffset -= 5 // Scroll by 5 characters
 					if m.horizontalOffset < 0 {
@@ -1151,7 +1158,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Right):
-			if m.state == stateValueViewer {
+			if m.state == stateValueViewer || m.state == stateReleaseValues {
 				m.horizontalOffset += 5 // Scroll by 5 characters
 				m.updateValuesViewWithSearch()
 			}
@@ -1532,12 +1539,12 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.state = stateReleaseList
 	case stateReleaseHistory:
 		m.state = stateReleaseDetail
-		m.releaseHistory = nil
-		m.releaseHistoryList.SetItems([]list.Item{})
 	case stateReleaseValues:
-		m.state = stateReleaseDetail
+		m.state = stateReleaseHistory
 		m.releaseValues = ""
 		m.releaseValuesLines = nil
+		m.selectedRevision = 0
+		m.horizontalOffset = 0
 	}
 	return m, nil
 }
@@ -1623,6 +1630,29 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 						loadReleaseHistory(m.helmClient, release.Name, release.Namespace),
 						loadReleaseStatus(m.helmClient, release.Name, release.Namespace),
 					)
+				}
+			}
+		}
+
+	case stateReleaseHistory:
+		selectedItem := m.releaseHistoryList.SelectedItem()
+		if selectedItem != nil && m.selectedRelease < len(m.releases) {
+			item := selectedItem.(listItem)
+			release := m.releases[m.selectedRelease]
+			// Find the revision by matching the title "Revision X"
+			for _, rev := range m.releaseHistory {
+				revTitle := fmt.Sprintf("Revision %d", rev.Revision)
+				if revTitle == item.title {
+					m.selectedRevision = rev.Revision
+					m.state = stateReleaseValues
+					m.loadingVals = true
+					return m, func() tea.Msg {
+						values, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, rev.Revision)
+						if err != nil {
+							return releaseValuesLoadedMsg{err: err}
+						}
+						return releaseValuesLoadedMsg{values: values}
+					}
 				}
 			}
 		}
@@ -2404,7 +2434,14 @@ func (m model) getBreadcrumb() string {
 			parts = append(parts, m.releases[m.selectedRelease].Name)
 		}
 
+		if m.state == stateReleaseHistory {
+			parts = append(parts, "history")
+		}
+
 		if m.state == stateReleaseValues {
+			if m.selectedRevision > 0 {
+				parts = append(parts, fmt.Sprintf("revision %d", m.selectedRevision))
+			}
 			parts = append(parts, "values")
 		}
 
@@ -2838,7 +2875,7 @@ func (m model) renderReleaseDetail() string {
 	}
 
 	content.WriteString("\n")
-	content.WriteString(helpStyle.Render("  Press 'v' to view values | esc: back  "))
+	content.WriteString(helpStyle.Render("  v: view current values | h: interactive history | esc: back  "))
 
 	return activePanelStyle.Render(content.String())
 }
@@ -2850,7 +2887,9 @@ func (m model) renderReleaseHistory() string {
 	if len(m.releaseHistory) == 0 {
 		return activePanelStyle.Render("No revision history found.")
 	}
-	return activePanelStyle.Render(m.releaseHistoryList.View())
+
+	hint := "\n" + helpStyle.Render("  Select a revision to view its values | esc: back  ")
+	return activePanelStyle.Render(m.releaseHistoryList.View()) + hint
 }
 
 func (m model) renderReleaseValues() string {
@@ -2860,6 +2899,23 @@ func (m model) renderReleaseValues() string {
 	if m.releaseValues == "" {
 		return activePanelStyle.Render("No values available.")
 	}
+
+	var header string
+	// Show which revision we're viewing
+	if m.selectedRevision > 0 {
+		header = infoStyle.Render(fmt.Sprintf(" Revision %d Values ", m.selectedRevision)) + "\n\n"
+	}
+
+	// Show horizontal scroll indicator if scrolled
+	if m.horizontalOffset > 0 {
+		scrollInfo := fmt.Sprintf(" ← Scrolled %d chars | use ←/→ or h/l to scroll ", m.horizontalOffset)
+		header += helpStyle.Render(scrollInfo) + "\n\n"
+	}
+
+	if header != "" {
+		return header + activePanelStyle.Render(m.releaseValuesView.View())
+	}
+
 	return activePanelStyle.Render(m.releaseValuesView.View())
 }
 

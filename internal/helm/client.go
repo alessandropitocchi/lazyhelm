@@ -375,6 +375,22 @@ func (c *Client) GetReleaseValues(releaseName, namespace string) (string, error)
 	return string(output), nil
 }
 
+// GetReleaseValuesByRevision returns the values used for a specific release revision
+func (c *Client) GetReleaseValuesByRevision(releaseName, namespace string, revision int) (string, error) {
+	args := []string{"get", "values", releaseName, "--revision", fmt.Sprintf("%d", revision)}
+	if namespace != "" {
+		args = append(args, "-n", namespace)
+	}
+
+	cmd := exec.Command("helm", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("helm get values (revision %d) failed: %w\nOutput: %s", revision, err, string(output))
+	}
+
+	return string(output), nil
+}
+
 // GetReleaseStatus returns the status of a release
 func (c *Client) GetReleaseStatus(releaseName, namespace string) (*ReleaseStatus, error) {
 	args := []string{"status", releaseName, "--output", "json"}
