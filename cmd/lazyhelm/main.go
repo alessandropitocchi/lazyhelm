@@ -1082,6 +1082,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, copyCmd
 			}
+			if m.state == stateReleaseValues && len(m.releaseValuesLines) > 0 {
+				var lineNum int
+				// If we have search matches, use the current match line
+				if len(m.searchMatches) > 0 && m.currentMatchIndex < len(m.searchMatches) {
+					lineNum = m.searchMatches[m.currentMatchIndex]
+				} else {
+					// Otherwise use the current viewport position (center of visible area)
+					lineNum = m.releaseValuesView.YOffset + m.releaseValuesView.Height/2
+					if lineNum >= len(m.releaseValuesLines) {
+						lineNum = len(m.releaseValuesLines) - 1
+					}
+				}
+
+				yamlPath := ui.GetYAMLPath(m.releaseValuesLines, lineNum)
+				var copyCmd tea.Cmd
+				if yamlPath != "" {
+					err := clipboard.WriteAll(yamlPath)
+					if err != nil {
+						copyCmd = m.setSuccessMsg("Failed to copy to clipboard")
+					} else {
+						copyCmd = m.setSuccessMsg("Copied: " + yamlPath)
+					}
+				} else {
+					copyCmd = m.setSuccessMsg("No YAML path found for current line")
+				}
+				return m, copyCmd
+			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Diff):
