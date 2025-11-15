@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/repo"
@@ -315,6 +316,7 @@ func (c *Client) ListNamespaces() ([]string, error) {
 		namespaces = append(namespaces, ns)
 	}
 
+	sort.Strings(namespaces)
 	return namespaces, nil
 }
 
