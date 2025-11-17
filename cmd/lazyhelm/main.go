@@ -204,6 +204,7 @@ type model struct {
 	releaseValues      string
 	releaseValuesLines []string
 	releaseStatus      *helm.ReleaseStatus
+	kubeContext        string
 
 	mainMenu              list.Model
 	browseMenu            list.Model
@@ -438,6 +439,11 @@ type releaseValuesLoadedMsg struct {
 type releaseStatusLoadedMsg struct {
 	status *helm.ReleaseStatus
 	err    error
+}
+
+type kubeContextLoadedMsg struct {
+	context string
+	err     error
 }
 
 type artifactHubSearchMsg struct {
@@ -1460,6 +1466,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.releaseStatus = msg.status
 		return m, nil
+
+	case kubeContextLoadedMsg:
+		if msg.err != nil {
+			// Context error is not fatal, just don't show it
+			m.kubeContext = "unknown"
+		} else {
+			m.kubeContext = msg.context
+		}
+		return m, nil
 	}
 
 	switch m.state {
@@ -1602,7 +1617,14 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 				return m, nil
 			case "Cluster Releases":
 				m.state = stateClusterReleasesMenu
-				return m, nil
+				// Load kubectl context
+				return m, func() tea.Msg {
+					ctx, err := m.helmClient.GetCurrentContext()
+					if err != nil {
+						return kubeContextLoadedMsg{err: err}
+					}
+					return kubeContextLoadedMsg{context: ctx}
+				}
 			case "Settings":
 				return m, m.setSuccessMsg("Feature coming soon!")
 			}
@@ -2961,7 +2983,12 @@ func (m model) renderArtifactHubVersions() string {
 }
 
 func (m model) renderClusterReleasesMenu() string {
-	return activePanelStyle.Render(m.clusterReleasesMenu.View())
+	var header string
+	if m.kubeContext != "" {
+		contextInfo := fmt.Sprintf(" Kubectl Context: %s ", m.kubeContext)
+		header = infoStyle.Render(contextInfo) + "\n\n"
+	}
+	return header + activePanelStyle.Render(m.clusterReleasesMenu.View())
 }
 
 func (m model) renderNamespaceList() string {

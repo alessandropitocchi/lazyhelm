@@ -428,3 +428,20 @@ func (c *Client) GetReleaseStatus(releaseName, namespace string) (*ReleaseStatus
 		Notes:       result.Info.Notes,
 	}, nil
 }
+
+// GetCurrentContext returns the current kubectl context
+func (c *Client) GetCurrentContext() (string, error) {
+	cmd := exec.Command("kubectl", "config", "current-context")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to get kubectl context: %w\nOutput: %s", err, string(output))
+	}
+
+	context := string(output)
+	// Trim newline
+	if len(context) > 0 && context[len(context)-1] == '\n' {
+		context = context[:len(context)-1]
+	}
+
+	return context, nil
+}
