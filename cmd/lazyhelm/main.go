@@ -1037,6 +1037,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.ahPackageList.SetItems(items)
 				clearCmd = m.setSuccessMsg("Filter cleared")
+
+			case stateReleaseList:
+				items := make([]list.Item, len(m.releases))
+				for i, release := range m.releases {
+					desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+					items[i] = listItem{
+						title:       release.Name,
+						description: desc,
+					}
+				}
+				m.releaseList.SetItems(items)
+				clearCmd = m.setSuccessMsg("Filter cleared")
 			}
 			return m, clearCmd
 
@@ -1843,7 +1855,7 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleSearch() (tea.Model, tea.Cmd) {
-	if m.state == stateRepoList || m.state == stateChartList || m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateDiffViewer || m.state == stateReleaseValues {
+	if m.state == stateRepoList || m.state == stateChartList || m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateDiffViewer || m.state == stateReleaseValues || m.state == stateReleaseList {
 		m.successMsg = "" // Clear success message
 		m.mode = searchMode
 		m.searchInput.Reset()
@@ -1923,6 +1935,18 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				// Clear search results
 				m.searchMatches = []int{}
 				m.lastSearchQuery = ""
+
+			case stateReleaseList:
+				// Restore full release list
+				items := make([]list.Item, len(m.releases))
+				for i, release := range m.releases {
+					desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+					items[i] = listItem{
+						title:       release.Name,
+						description: desc,
+					}
+				}
+				m.releaseList.SetItems(items)
 
 			case stateDiffViewer:
 				// Clear search results and restore original content
@@ -2147,6 +2171,19 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.versionList.SetItems(items)
 
+		case stateReleaseList:
+			matches := fuzzy.Find(query, releasesToStrings(m.releases))
+			items := make([]list.Item, len(matches))
+			for i, match := range matches {
+				release := m.releases[match.Index]
+				desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+				items[i] = listItem{
+					title:       release.Name,
+					description: desc,
+				}
+			}
+			m.releaseList.SetItems(items)
+
 		case stateValueViewer:
 			// Find all matches in values
 			m.searchMatches = []int{}
@@ -2247,6 +2284,14 @@ func versionsToStrings(versions []helm.ChartVersion) []string {
 	result := make([]string, len(versions))
 	for i, v := range versions {
 		result[i] = v.Version
+	}
+	return result
+}
+
+func releasesToStrings(releases []helm.Release) []string {
+	result := make([]string, len(releases))
+	for i, r := range releases {
+		result[i] = r.Name
 	}
 	return result
 }
