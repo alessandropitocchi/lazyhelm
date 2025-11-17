@@ -214,6 +214,7 @@ type model struct {
 	namespaceList         list.Model
 	releaseList           list.Model
 	releaseHistoryList    list.Model
+	releaseDetailView     viewport.Model
 	releaseValuesView     viewport.Model
 	repoList     list.Model
 	chartList    list.Model
@@ -795,6 +796,9 @@ func initialModel() model {
 	releaseHistoryList.SetFilteringEnabled(false)
 	releaseHistoryList.Styles.Title = titleStyle
 
+	// Release Detail View
+	releaseDetailView := viewport.New(0, 0)
+
 	// Release Values View
 	releaseValuesView := viewport.New(0, 0)
 
@@ -816,6 +820,7 @@ func initialModel() model {
 		namespaceList:         namespaceList,
 		releaseList:           releaseList,
 		releaseHistoryList:    releaseHistoryList,
+		releaseDetailView:     releaseDetailView,
 		releaseValuesView:     releaseValuesView,
 		repoList:              repoList,
 		chartList:         chartList,
@@ -867,6 +872,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.diffView.Width = msg.Width - 6
 		m.diffView.Height = msg.Height - 8
+
+		m.releaseDetailView.Width = msg.Width - 6
+		m.releaseDetailView.Height = msg.Height - 8
 
 		m.releaseValuesView.Width = msg.Width - 6
 		m.releaseValuesView.Height = msg.Height - 8
@@ -1192,12 +1200,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Left):
-			// 'h' for history in release detail view
-			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) {
+			// 'h' for history in release detail view (only for 'h', not arrow keys)
+			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) && msg.String() == "h" {
 				m.state = stateReleaseHistory
 				return m, nil
 			}
-			// Horizontal scroll in value viewers
+			// Horizontal scroll in value viewers and release detail (only arrow keys for detail)
 			if m.state == stateValueViewer {
 				if m.horizontalOffset > 0 {
 					m.horizontalOffset -= 5 // Scroll by 5 characters
@@ -1214,6 +1222,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.updateReleaseValuesViewWithSearch()
 				}
+			} else if m.state == stateReleaseDetail {
+				if m.horizontalOffset > 0 {
+					m.horizontalOffset -= 5
+					if m.horizontalOffset < 0 {
+						m.horizontalOffset = 0
+					}
+					m.updateReleaseDetailView()
+				}
 			}
 			return m, nil
 
@@ -1224,6 +1240,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.state == stateReleaseValues {
 				m.horizontalOffset += 5 // Scroll by 5 characters
 				m.updateReleaseValuesViewWithSearch()
+			} else if m.state == stateReleaseDetail {
+				m.horizontalOffset += 5
+				m.updateReleaseDetailView()
 			}
 			return m, nil
 		}
@@ -1461,6 +1480,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.releaseHistoryList.SetItems(items)
+
+		// Update detail view if we're showing it
+		if m.state == stateReleaseDetail {
+			m.updateReleaseDetailView()
+		}
 		return m, nil
 
 	case releaseValuesLoadedMsg:
@@ -1484,6 +1508,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.releaseStatus = msg.status
+
+		// Update detail view if we're showing it
+		if m.state == stateReleaseDetail {
+			m.updateReleaseDetailView()
+		}
 		return m, nil
 
 	case kubeContextLoadedMsg:
@@ -1537,7 +1566,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.releaseList, cmd = m.releaseList.Update(msg)
 		cmds = append(cmds, cmd)
 	case stateReleaseDetail:
-		m.releaseHistoryList, cmd = m.releaseHistoryList.Update(msg)
+		m.releaseDetailView, cmd = m.releaseDetailView.Update(msg)
 		cmds = append(cmds, cmd)
 	case stateReleaseHistory:
 		m.releaseHistoryList, cmd = m.releaseHistoryList.Update(msg)
@@ -1617,6 +1646,7 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.state = stateReleaseList
 	case stateReleaseHistory:
 		m.state = stateReleaseDetail
+		m.updateReleaseDetailView()
 	case stateReleaseValues:
 		m.state = stateReleaseHistory
 		m.releaseValues = ""
@@ -3164,17 +3194,12 @@ func (m model) renderReleaseList() string {
 	return header + activePanelStyle.Render(m.releaseList.View())
 }
 
-func (m model) renderReleaseDetail() string {
-	if m.loading {
-		return activePanelStyle.Render("Loading release details...")
-	}
-
+func (m *model) updateReleaseDetailView() {
 	if m.selectedRelease >= len(m.releases) {
-		return activePanelStyle.Render("No release selected.")
+		return
 	}
 
 	release := m.releases[m.selectedRelease]
-
 	var content strings.Builder
 
 	// Release header
@@ -3222,7 +3247,59 @@ func (m model) renderReleaseDetail() string {
 
 	content.WriteString(helpStyle.Render("  v: view current values | h: interactive history | esc: back  "))
 
-	return activePanelStyle.Render(content.String())
+	// Apply horizontal scrolling
+	lines := strings.Split(content.String(), "\n")
+	viewportWidth := m.releaseDetailView.Width
+	if viewportWidth <= 0 {
+		viewportWidth = m.termWidth - 6
+	}
+
+	scrolledLines := make([]string, len(lines))
+	for i, line := range lines {
+		visibleLine := line
+		hasMore := false
+
+		if len(line) > m.horizontalOffset {
+			visibleLine = line[m.horizontalOffset:]
+
+			if len(visibleLine) > viewportWidth-3 {
+				visibleLine = visibleLine[:viewportWidth-3]
+				hasMore = true
+			}
+		} else {
+			visibleLine = ""
+		}
+
+		if hasMore {
+			scrolledLines[i] = visibleLine + " →"
+		} else {
+			scrolledLines[i] = visibleLine
+		}
+	}
+
+	m.releaseDetailView.SetContent(strings.Join(scrolledLines, "\n"))
+}
+
+func (m model) renderReleaseDetail() string {
+	if m.loading {
+		return activePanelStyle.Render("Loading release details...")
+	}
+
+	if m.selectedRelease >= len(m.releases) {
+		return activePanelStyle.Render("No release selected.")
+	}
+
+	var header string
+	if m.horizontalOffset > 0 {
+		scrollInfo := fmt.Sprintf(" ← Scrolled %d chars | use ←/→ to scroll ", m.horizontalOffset)
+		header = helpStyle.Render(scrollInfo) + "\n\n"
+	}
+
+	if header != "" {
+		return header + activePanelStyle.Render(m.releaseDetailView.View())
+	}
+
+	return activePanelStyle.Render(m.releaseDetailView.View())
 }
 
 func (m model) renderReleaseHistory() string {
