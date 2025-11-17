@@ -3062,8 +3062,19 @@ func (m model) renderReleaseDetail() string {
 	} else {
 		content.WriteString("  Loading...\n")
 	}
-
 	content.WriteString("\n")
+
+	// Notes section
+	if m.releaseStatus != nil && m.releaseStatus.Notes != "" {
+		content.WriteString("Notes:\n")
+		// Indent each line of notes
+		noteLines := strings.Split(m.releaseStatus.Notes, "\n")
+		for _, line := range noteLines {
+			content.WriteString("  " + line + "\n")
+		}
+		content.WriteString("\n")
+	}
+
 	content.WriteString(helpStyle.Render("  v: view current values | h: interactive history | esc: back  "))
 
 	return activePanelStyle.Render(content.String())
