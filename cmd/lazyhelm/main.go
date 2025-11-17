@@ -301,12 +301,12 @@ var defaultKeys = keyMap{
 		key.WithHelp("↓/j", "down"),
 	),
 	Left: key.NewBinding(
-		key.WithKeys("left", "h"),
-		key.WithHelp("←/h", "scroll left"),
+		key.WithKeys("left"),
+		key.WithHelp("←", "scroll left"),
 	),
 	Right: key.NewBinding(
-		key.WithKeys("right", "l"),
-		key.WithHelp("→/l", "scroll right"),
+		key.WithKeys("right"),
+		key.WithHelp("→", "scroll right"),
 	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter"),
@@ -1199,16 +1199,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case key.Matches(msg, m.keys.Left):
-			// 'h' for history in release detail view (only for 'h', not arrow keys)
-			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) && msg.String() == "h" {
+		case msg.String() == "h":
+			// 'h' for history in release detail view
+			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) {
 				m.state = stateReleaseHistory
 				return m, nil
 			}
-			// Horizontal scroll in value viewers and release detail (only arrow keys for detail)
+			return m, nil
+
+		case key.Matches(msg, m.keys.Left):
+			// Horizontal scroll left (arrow key only)
 			if m.state == stateValueViewer {
 				if m.horizontalOffset > 0 {
-					m.horizontalOffset -= 5 // Scroll by 5 characters
+					m.horizontalOffset -= 5
 					if m.horizontalOffset < 0 {
 						m.horizontalOffset = 0
 					}
@@ -1216,7 +1219,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else if m.state == stateReleaseValues {
 				if m.horizontalOffset > 0 {
-					m.horizontalOffset -= 5 // Scroll by 5 characters
+					m.horizontalOffset -= 5
 					if m.horizontalOffset < 0 {
 						m.horizontalOffset = 0
 					}
@@ -1234,11 +1237,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Right):
+			// Horizontal scroll right (arrow key only)
 			if m.state == stateValueViewer {
-				m.horizontalOffset += 5 // Scroll by 5 characters
+				m.horizontalOffset += 5
 				m.updateValuesViewWithSearch()
 			} else if m.state == stateReleaseValues {
-				m.horizontalOffset += 5 // Scroll by 5 characters
+				m.horizontalOffset += 5
 				m.updateReleaseValuesViewWithSearch()
 			} else if m.state == stateReleaseDetail {
 				m.horizontalOffset += 5
@@ -2945,7 +2949,7 @@ func (m model) renderHelp() string {
 
 	help += "  Navigation:\n"
 	help += "    ↑/k, ↓/j    Move up/down\n"
-	help += "    ←/h, →/l    Scroll left/right (in values view)\n"
+	help += "    ←, →        Scroll left/right (in values view)\n"
 	help += "    enter       Select item / Go deeper\n"
 	help += "    esc         Go back to previous screen\n"
 	help += "    q           Quit application\n"
@@ -2978,7 +2982,7 @@ func (m model) renderHelp() string {
 	help += "    w           Write/export values to file\n"
 	help += "    t           Generate Helm template\n"
 	help += "    y           Copy YAML path to clipboard\n"
-	help += "    ←/→, h/l    Scroll horizontally for long lines\n\n"
+	help += "    ←/→         Scroll horizontally for long lines\n\n"
 
 	help += "  Tips:\n"
 	help += "    • Horizontal scroll: Lines ending with → continue beyond screen\n"
