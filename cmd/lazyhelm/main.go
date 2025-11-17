@@ -2927,6 +2927,12 @@ func (m model) renderHelp() string {
 	help += "    v           View all versions (in chart list)\n"
 	help += "    d           Diff two versions (select first, then second)\n\n"
 
+	help += "  Cluster Releases:\n"
+	help += "    v           View release values (in release list)\n"
+	help += "    h           View release history & revisions\n"
+	help += "    d           Diff two revisions (select first, then second)\n"
+	help += "    w           Export release values to file\n\n"
+
 	help += "  Values View:\n"
 	help += "    e           Edit values in external editor ($EDITOR)\n"
 	help += "    w           Write/export values to file\n"
