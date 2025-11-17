@@ -136,6 +136,12 @@ const (
 	stateArtifactHubSearch
 	stateArtifactHubPackageDetail
 	stateArtifactHubVersions
+	stateClusterReleasesMenu
+	stateNamespaceList
+	stateReleaseList
+	stateReleaseDetail
+	stateReleaseHistory
+	stateReleaseValues
 )
 
 type inputMode int
@@ -157,6 +163,7 @@ type model struct {
 	chartCache   map[string]chartCacheEntry
 	versionCache map[string]versionCacheEntry
 	state        navigationState
+	previousState navigationState
 	mode         inputMode
 
 	repos        []helm.Repository
@@ -188,8 +195,27 @@ type model struct {
 	ahSelectedVersion  int
 	ahLoading          bool
 
-	mainMenu     list.Model
-	browseMenu   list.Model
+	// Cluster Releases
+	releases           []helm.Release
+	namespaces         []string
+	selectedRelease    int
+	selectedRevision   int
+	compareRevision    int
+	selectedNamespace  string
+	releaseHistory     []helm.ReleaseRevision
+	releaseValues      string
+	releaseValuesLines []string
+	releaseStatus      *helm.ReleaseStatus
+	kubeContext        string
+
+	mainMenu              list.Model
+	browseMenu            list.Model
+	clusterReleasesMenu   list.Model
+	namespaceList         list.Model
+	releaseList           list.Model
+	releaseHistoryList    list.Model
+	releaseDetailView     viewport.Model
+	releaseValuesView     viewport.Model
 	repoList     list.Model
 	chartList    list.Model
 	versionList  list.Model
@@ -275,12 +301,12 @@ var defaultKeys = keyMap{
 		key.WithHelp("↓/j", "down"),
 	),
 	Left: key.NewBinding(
-		key.WithKeys("left", "h"),
-		key.WithHelp("←/h", "scroll left"),
+		key.WithKeys("left"),
+		key.WithHelp("←", "scroll left"),
 	),
 	Right: key.NewBinding(
-		key.WithKeys("right", "l"),
-		key.WithHelp("→/l", "scroll right"),
+		key.WithKeys("right"),
+		key.WithHelp("→", "scroll right"),
 	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter"),
@@ -393,6 +419,36 @@ type editorFinishedMsg struct {
 	err      error
 }
 
+type releasesLoadedMsg struct {
+	releases []helm.Release
+	err      error
+}
+
+type namespacesLoadedMsg struct {
+	namespaces []string
+	err        error
+}
+
+type releaseHistoryLoadedMsg struct {
+	history []helm.ReleaseRevision
+	err     error
+}
+
+type releaseValuesLoadedMsg struct {
+	values string
+	err    error
+}
+
+type releaseStatusLoadedMsg struct {
+	status *helm.ReleaseStatus
+	err    error
+}
+
+type kubeContextLoadedMsg struct {
+	context string
+	err     error
+}
+
 type artifactHubSearchMsg struct {
 	packages []artifacthub.Package
 	err      error
@@ -479,6 +535,41 @@ func loadVersions(client *helm.Client, versionCache map[string]versionCacheEntry
 			}
 		}
 		return versionsLoadedMsg{versions: versions, err: err}
+	}
+}
+
+func loadReleases(client *helm.Client, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		releases, err := client.ListReleases(namespace)
+		return releasesLoadedMsg{releases: releases, err: err}
+	}
+}
+
+func loadNamespaces(client *helm.Client) tea.Cmd {
+	return func() tea.Msg {
+		namespaces, err := client.ListNamespaces()
+		return namespacesLoadedMsg{namespaces: namespaces, err: err}
+	}
+}
+
+func loadReleaseHistory(client *helm.Client, releaseName, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		history, err := client.GetReleaseHistory(releaseName, namespace)
+		return releaseHistoryLoadedMsg{history: history, err: err}
+	}
+}
+
+func loadReleaseValues(client *helm.Client, releaseName, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		values, err := client.GetReleaseValues(releaseName, namespace)
+		return releaseValuesLoadedMsg{values: values, err: err}
+	}
+}
+
+func loadReleaseStatus(client *helm.Client, releaseName, namespace string) tea.Cmd {
+	return func() tea.Msg {
+		status, err := client.GetReleaseStatus(releaseName, namespace)
+		return releaseStatusLoadedMsg{status: status, err: err}
 	}
 }
 
@@ -637,7 +728,7 @@ func initialModel() model {
 	// Main Menu
 	menuItems := []list.Item{
 		listItem{title: "Browse Repositories", description: "Browse Helm repositories and charts"},
-		listItem{title: "Cluster Releases", description: "View and manage deployed Helm releases (Coming Soon)"},
+		listItem{title: "Cluster Releases", description: "View deployed Helm releases"},
 		listItem{title: "Settings", description: "Configure LazyHelm settings (Coming Soon)"},
 	}
 	mainMenuDelegate := list.NewDefaultDelegate()
@@ -661,6 +752,56 @@ func initialModel() model {
 	browseMenu.SetFilteringEnabled(false)
 	browseMenu.Styles.Title = titleStyle
 
+	// Cluster Releases Menu
+	clusterReleasesMenuItems := []list.Item{
+		listItem{title: "All Namespaces", description: "View releases from all namespaces"},
+		listItem{title: "Select Namespace", description: "Choose a specific namespace"},
+	}
+	clusterReleasesMenuDelegate := list.NewDefaultDelegate()
+	clusterReleasesMenuDelegate.Styles = delegate.Styles
+	clusterReleasesMenu := list.New(clusterReleasesMenuItems, clusterReleasesMenuDelegate, 0, 0)
+	clusterReleasesMenu.Title = "Cluster Releases"
+	clusterReleasesMenu.SetShowStatusBar(false)
+	clusterReleasesMenu.SetFilteringEnabled(false)
+	clusterReleasesMenu.Styles.Title = titleStyle
+
+	// Namespace List
+	namespaceDelegate := list.NewDefaultDelegate()
+	namespaceDelegate.Styles = delegate.Styles
+	namespaceList := list.New([]list.Item{}, namespaceDelegate, 0, 0)
+	namespaceList.Title = "Namespaces"
+	namespaceList.SetShowStatusBar(false)
+	namespaceList.SetFilteringEnabled(true)
+	namespaceList.Styles.Title = titleStyle
+	namespaceList.Styles.FilterPrompt = searchInputStyle
+	namespaceList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+
+	// Release List
+	releaseDelegate := list.NewDefaultDelegate()
+	releaseDelegate.Styles = delegate.Styles
+	releaseList := list.New([]list.Item{}, releaseDelegate, 0, 0)
+	releaseList.Title = "Releases"
+	releaseList.SetShowStatusBar(false)
+	releaseList.SetFilteringEnabled(true)
+	releaseList.Styles.Title = titleStyle
+	releaseList.Styles.FilterPrompt = searchInputStyle
+	releaseList.Styles.FilterCursor = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+
+	// Release History List
+	releaseHistoryDelegate := list.NewDefaultDelegate()
+	releaseHistoryDelegate.Styles = delegate.Styles
+	releaseHistoryList := list.New([]list.Item{}, releaseHistoryDelegate, 0, 0)
+	releaseHistoryList.Title = "Release History"
+	releaseHistoryList.SetShowStatusBar(false)
+	releaseHistoryList.SetFilteringEnabled(false)
+	releaseHistoryList.Styles.Title = titleStyle
+
+	// Release Detail View
+	releaseDetailView := viewport.New(0, 0)
+
+	// Release Values View
+	releaseValuesView := viewport.New(0, 0)
+
 	return model{
 		helmClient:        client,
 		cache:             cache,
@@ -669,12 +810,19 @@ func initialModel() model {
 		state:             stateMainMenu,
 		mode:              normalMode,
 		repos:             repos,
-		artifactHubClient: artifacthub.NewClient(),
-		ahPackageList:     ahPackageList,
-		ahVersionList:     ahVersionList,
-		mainMenu:          mainMenu,
-		browseMenu:        browseMenu,
-		repoList:          repoList,
+		compareRevision:   -1,
+		artifactHubClient:     artifacthub.NewClient(),
+		ahPackageList:         ahPackageList,
+		ahVersionList:         ahVersionList,
+		mainMenu:              mainMenu,
+		browseMenu:            browseMenu,
+		clusterReleasesMenu:   clusterReleasesMenu,
+		namespaceList:         namespaceList,
+		releaseList:           releaseList,
+		releaseHistoryList:    releaseHistoryList,
+		releaseDetailView:     releaseDetailView,
+		releaseValuesView:     releaseValuesView,
+		repoList:              repoList,
 		chartList:         chartList,
 		versionList:       versionList,
 		valuesView:        valuesView,
@@ -712,6 +860,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ahPackageList.SetSize(w-4, h)
 		m.ahVersionList.SetSize(w/3, h)
 
+		// Cluster Releases lists
+		m.clusterReleasesMenu.SetSize(w/2, h)
+		m.namespaceList.SetSize(w/3, h)
+		m.releaseList.SetSize(w-4, h)
+		m.releaseHistoryList.SetSize(w/3, h)
+
 		// Values view takes full screen
 		m.valuesView.Width = msg.Width - 6  // Full width minus border padding
 		m.valuesView.Height = msg.Height - 8 // Full height minus header/footer
@@ -719,12 +873,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffView.Width = msg.Width - 6
 		m.diffView.Height = msg.Height - 8
 
+		m.releaseDetailView.Width = msg.Width - 6
+		m.releaseDetailView.Height = msg.Height - 8
+
+		m.releaseValuesView.Width = msg.Width - 6
+		m.releaseValuesView.Height = msg.Height - 8
+
 		return m, nil
 
 	case tea.KeyMsg:
 		if m.state == stateHelp {
 			if msg.String() == "?" || msg.String() == "esc" || msg.String() == "q" {
-				m.state = stateRepoList
+				m.state = m.previousState
 			}
 			return m, nil
 		}
@@ -738,6 +898,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keys.Help):
+			m.previousState = m.state
 			m.state = stateHelp
 			return m, nil
 
@@ -801,7 +962,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Export):
-			if m.state == stateChartDetail || m.state == stateValueViewer {
+			if m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateReleaseValues {
 				m.mode = exportValuesMode
 				m.searchInput.Reset()
 				m.searchInput.Placeholder = "./values.yaml"
@@ -888,6 +1049,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.ahPackageList.SetItems(items)
 				clearCmd = m.setSuccessMsg("Filter cleared")
+
+			case stateReleaseList:
+				items := make([]list.Item, len(m.releases))
+				for i, release := range m.releases {
+					desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+					items[i] = listItem{
+						title:       release.Name,
+						description: desc,
+					}
+				}
+				m.releaseList.SetItems(items)
+				clearCmd = m.setSuccessMsg("Filter cleared")
 			}
 			return m, clearCmd
 
@@ -902,6 +1075,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.state == stateArtifactHubPackageDetail && m.ahSelectedPackage != nil {
 				m.state = stateArtifactHubVersions
+			}
+			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) {
+				release := m.releases[m.selectedRelease]
+				m.state = stateReleaseValues
+				m.loadingVals = true
+				return m, loadReleaseValues(m.helmClient, release.Name, release.Namespace)
 			}
 			return m, nil
 
@@ -933,12 +1112,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, copyCmd
 			}
+			if m.state == stateReleaseValues && len(m.releaseValuesLines) > 0 {
+				var lineNum int
+				// If we have search matches, use the current match line
+				if len(m.searchMatches) > 0 && m.currentMatchIndex < len(m.searchMatches) {
+					lineNum = m.searchMatches[m.currentMatchIndex]
+				} else {
+					// Otherwise use the current viewport position (center of visible area)
+					lineNum = m.releaseValuesView.YOffset + m.releaseValuesView.Height/2
+					if lineNum >= len(m.releaseValuesLines) {
+						lineNum = len(m.releaseValuesLines) - 1
+					}
+				}
+
+				yamlPath := ui.GetYAMLPath(m.releaseValuesLines, lineNum)
+				var copyCmd tea.Cmd
+				if yamlPath != "" {
+					err := clipboard.WriteAll(yamlPath)
+					if err != nil {
+						copyCmd = m.setSuccessMsg("Failed to copy to clipboard")
+					} else {
+						copyCmd = m.setSuccessMsg("Copied: " + yamlPath)
+					}
+				} else {
+					copyCmd = m.setSuccessMsg("No YAML path found for current line")
+				}
+				return m, copyCmd
+			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Diff):
 			if m.state == stateChartDetail && len(m.versions) > 1 {
 				m.diffMode = true
 				m.compareVersion = m.versionList.Index()
+			} else if m.state == stateReleaseHistory && len(m.releaseHistory) > 1 {
+				m.diffMode = true
+				m.compareRevision = m.releaseHistoryList.Index()
 			}
 			return m, nil
 
@@ -990,22 +1199,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case msg.String() == "h":
+			// 'h' for history in release detail view
+			if m.state == stateReleaseDetail && m.selectedRelease < len(m.releases) {
+				m.state = stateReleaseHistory
+				return m, nil
+			}
+			return m, nil
+
 		case key.Matches(msg, m.keys.Left):
+			// Horizontal scroll left (arrow key only)
 			if m.state == stateValueViewer {
 				if m.horizontalOffset > 0 {
-					m.horizontalOffset -= 5 // Scroll by 5 characters
+					m.horizontalOffset -= 5
 					if m.horizontalOffset < 0 {
 						m.horizontalOffset = 0
 					}
 					m.updateValuesViewWithSearch()
 				}
+			} else if m.state == stateReleaseValues {
+				if m.horizontalOffset > 0 {
+					m.horizontalOffset -= 5
+					if m.horizontalOffset < 0 {
+						m.horizontalOffset = 0
+					}
+					m.updateReleaseValuesViewWithSearch()
+				}
+			} else if m.state == stateReleaseDetail {
+				if m.horizontalOffset > 0 {
+					m.horizontalOffset -= 5
+					if m.horizontalOffset < 0 {
+						m.horizontalOffset = 0
+					}
+					m.updateReleaseDetailView()
+				}
 			}
 			return m, nil
 
 		case key.Matches(msg, m.keys.Right):
+			// Horizontal scroll right (arrow key only)
 			if m.state == stateValueViewer {
-				m.horizontalOffset += 5 // Scroll by 5 characters
+				m.horizontalOffset += 5
 				m.updateValuesViewWithSearch()
+			} else if m.state == stateReleaseValues {
+				m.horizontalOffset += 5
+				m.updateReleaseValuesViewWithSearch()
+			} else if m.state == stateReleaseDetail {
+				m.horizontalOffset += 5
+				m.updateReleaseDetailView()
 			}
 			return m, nil
 		}
@@ -1188,6 +1429,104 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clearSuccessMsgMsg:
 		m.successMsg = ""
 		return m, nil
+
+	case releasesLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releases = msg.releases
+		items := make([]list.Item, len(msg.releases))
+		for i, release := range msg.releases {
+			desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+			items[i] = listItem{
+				title:       release.Name,
+				description: desc,
+			}
+		}
+		m.releaseList.SetItems(items)
+		return m, nil
+
+	case namespacesLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.namespaces = msg.namespaces
+		items := make([]list.Item, len(msg.namespaces))
+		for i, ns := range msg.namespaces {
+			items[i] = listItem{
+				title:       ns,
+				description: "Kubernetes namespace",
+			}
+		}
+		m.namespaceList.SetItems(items)
+		return m, nil
+
+	case releaseHistoryLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releaseHistory = msg.history
+		items := make([]list.Item, len(msg.history))
+		for i, rev := range msg.history {
+			desc := fmt.Sprintf("%s | %s | %s", rev.Status, rev.Chart, rev.Updated)
+			items[i] = listItem{
+				title:       fmt.Sprintf("Revision %d", rev.Revision),
+				description: desc,
+			}
+		}
+		m.releaseHistoryList.SetItems(items)
+
+		// Update detail view if we're showing it
+		if m.state == stateReleaseDetail {
+			m.updateReleaseDetailView()
+		}
+		return m, nil
+
+	case releaseValuesLoadedMsg:
+		m.loadingVals = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releaseValues = msg.values
+		m.releaseValuesLines = strings.Split(msg.values, "\n")
+		highlighted := ui.HighlightYAMLContent(msg.values)
+		m.releaseValuesView.SetContent(highlighted)
+		return m, nil
+
+	case releaseStatusLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+
+		m.releaseStatus = msg.status
+
+		// Update detail view if we're showing it
+		if m.state == stateReleaseDetail {
+			m.updateReleaseDetailView()
+		}
+		return m, nil
+
+	case kubeContextLoadedMsg:
+		if msg.err != nil {
+			// Context error is not fatal, just don't show it
+			m.kubeContext = "unknown"
+		} else {
+			m.kubeContext = msg.context
+		}
+		return m, nil
 	}
 
 	switch m.state {
@@ -1220,6 +1559,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	case stateArtifactHubVersions:
 		m.ahVersionList, cmd = m.ahVersionList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateClusterReleasesMenu:
+		m.clusterReleasesMenu, cmd = m.clusterReleasesMenu.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateNamespaceList:
+		m.namespaceList, cmd = m.namespaceList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseList:
+		m.releaseList, cmd = m.releaseList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseDetail:
+		m.releaseDetailView, cmd = m.releaseDetailView.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseHistory:
+		m.releaseHistoryList, cmd = m.releaseHistoryList.Update(msg)
+		cmds = append(cmds, cmd)
+	case stateReleaseValues:
+		m.releaseValuesView, cmd = m.releaseValuesView.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
@@ -1256,7 +1613,13 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.values = ""
 		m.valuesLines = nil
 	case stateDiffViewer:
-		m.state = stateChartDetail
+		// Return to release history if we were comparing revisions, otherwise chart detail
+		if m.compareRevision >= 0 {
+			m.state = stateReleaseHistory
+			m.compareRevision = -1
+		} else {
+			m.state = stateChartDetail
+		}
 	case stateArtifactHubSearch:
 		m.state = stateBrowseMenu
 		m.ahPackages = nil
@@ -1267,6 +1630,33 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.ahVersionList.SetItems([]list.Item{})
 	case stateArtifactHubVersions:
 		m.state = stateArtifactHubPackageDetail
+	case stateClusterReleasesMenu:
+		m.state = stateMainMenu
+	case stateNamespaceList:
+		m.state = stateClusterReleasesMenu
+		m.namespaces = nil
+		m.namespaceList.SetItems([]list.Item{})
+	case stateReleaseList:
+		if m.selectedNamespace == "" {
+			// Came from "All Namespaces"
+			m.state = stateClusterReleasesMenu
+		} else {
+			// Came from "Select Namespace"
+			m.state = stateNamespaceList
+		}
+		m.releases = nil
+		m.releaseList.SetItems([]list.Item{})
+	case stateReleaseDetail:
+		m.state = stateReleaseList
+	case stateReleaseHistory:
+		m.state = stateReleaseDetail
+		m.updateReleaseDetailView()
+	case stateReleaseValues:
+		m.state = stateReleaseHistory
+		m.releaseValues = ""
+		m.releaseValuesLines = nil
+		m.selectedRevision = 0
+		m.horizontalOffset = 0
 	}
 	return m, nil
 }
@@ -1285,7 +1675,15 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 				m.state = stateBrowseMenu
 				return m, nil
 			case "Cluster Releases":
-				return m, m.setSuccessMsg("Feature coming soon!")
+				m.state = stateClusterReleasesMenu
+				// Load kubectl context
+				return m, func() tea.Msg {
+					ctx, err := m.helmClient.GetCurrentContext()
+					if err != nil {
+						return kubeContextLoadedMsg{err: err}
+					}
+					return kubeContextLoadedMsg{context: ctx}
+				}
 			case "Settings":
 				return m, m.setSuccessMsg("Feature coming soon!")
 			}
@@ -1306,6 +1704,119 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 				m.searchInput.Focus()
 				m.state = stateArtifactHubSearch
 				return m, nil
+			}
+		}
+
+	case stateClusterReleasesMenu:
+		selectedItem := m.clusterReleasesMenu.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			switch item.title {
+			case "All Namespaces":
+				m.state = stateReleaseList
+				m.selectedNamespace = "" // Empty means all namespaces
+				m.loading = true
+				return m, loadReleases(m.helmClient, "")
+			case "Select Namespace":
+				m.state = stateNamespaceList
+				m.loading = true
+				return m, loadNamespaces(m.helmClient)
+			}
+		}
+
+	case stateNamespaceList:
+		selectedItem := m.namespaceList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			m.selectedNamespace = item.title
+			m.state = stateReleaseList
+			m.loading = true
+			return m, loadReleases(m.helmClient, item.title)
+		}
+
+	case stateReleaseList:
+		selectedItem := m.releaseList.SelectedItem()
+		if selectedItem != nil {
+			item := selectedItem.(listItem)
+			// Find the release by name
+			for i, release := range m.releases {
+				if release.Name == item.title {
+					m.selectedRelease = i
+					m.state = stateReleaseDetail
+					m.loading = true
+					// Load both history and status for the detail view
+					return m, tea.Batch(
+						loadReleaseHistory(m.helmClient, release.Name, release.Namespace),
+						loadReleaseStatus(m.helmClient, release.Name, release.Namespace),
+					)
+				}
+			}
+		}
+
+	case stateReleaseHistory:
+		selectedItem := m.releaseHistoryList.SelectedItem()
+		if selectedItem != nil && m.selectedRelease < len(m.releases) {
+			item := selectedItem.(listItem)
+			release := m.releases[m.selectedRelease]
+
+			// Find the selected revision index
+			var selectedIdx int = -1
+			for i, rev := range m.releaseHistory {
+				revTitle := fmt.Sprintf("Revision %d", rev.Revision)
+				if revTitle == item.title {
+					selectedIdx = i
+					break
+				}
+			}
+
+			if selectedIdx >= 0 {
+				if m.diffMode {
+					if selectedIdx == m.compareRevision {
+						return m, m.setSuccessMsg("Please select a different revision to compare")
+					}
+
+					revision1 := m.releaseHistory[m.compareRevision].Revision
+					revision2 := m.releaseHistory[selectedIdx].Revision
+
+					// Get values for both revisions
+					values1, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, revision1)
+					if err != nil {
+						m.err = err
+						m.diffMode = false
+						return m, nil
+					}
+
+					values2, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, revision2)
+					if err != nil {
+						m.err = err
+						m.diffMode = false
+						return m, nil
+					}
+
+					diffLines := ui.DiffYAML(values1, values2)
+					diffContent := m.renderDiffContent(diffLines, fmt.Sprintf("rev%d", revision1), fmt.Sprintf("rev%d", revision2))
+
+					// Save diff lines for search functionality
+					m.diffLines = strings.Split(diffContent, "\n")
+
+					m.diffView.SetContent(diffContent)
+					m.state = stateDiffViewer
+					m.diffMode = false
+					return m, nil
+				}
+
+				// Normal flow: view values for selected revision
+				rev := m.releaseHistory[selectedIdx]
+				m.selectedRevision = rev.Revision
+				m.state = stateReleaseValues
+				m.loadingVals = true
+				return m, func() tea.Msg {
+					values, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, rev.Revision)
+					if err != nil {
+						return releaseValuesLoadedMsg{err: err}
+					}
+					return releaseValuesLoadedMsg{values: values}
+				}
 			}
 		}
 
@@ -1435,7 +1946,7 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleSearch() (tea.Model, tea.Cmd) {
-	if m.state == stateRepoList || m.state == stateChartList || m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateDiffViewer {
+	if m.state == stateRepoList || m.state == stateChartList || m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateDiffViewer || m.state == stateReleaseValues || m.state == stateReleaseList {
 		m.successMsg = "" // Clear success message
 		m.mode = searchMode
 		m.searchInput.Reset()
@@ -1511,6 +2022,23 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.searchMatches = []int{}
 				m.lastSearchQuery = ""
 
+			case stateReleaseValues:
+				// Clear search results
+				m.searchMatches = []int{}
+				m.lastSearchQuery = ""
+
+			case stateReleaseList:
+				// Restore full release list
+				items := make([]list.Item, len(m.releases))
+				for i, release := range m.releases {
+					desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+					items[i] = listItem{
+						title:       release.Name,
+						description: desc,
+					}
+				}
+				m.releaseList.SetItems(items)
+
 			case stateDiffViewer:
 				// Clear search results and restore original content
 				m.searchMatches = []int{}
@@ -1581,6 +2109,19 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.mode = normalMode
 			m.searchInput.Blur()
+
+			if m.state == stateReleaseValues {
+				return m, func() tea.Msg {
+					err := os.WriteFile(path, []byte(m.releaseValues), 0644)
+					if err != nil {
+						return operationDoneMsg{err: err}
+					}
+					if m.selectedRevision > 0 {
+						return operationDoneMsg{success: fmt.Sprintf("Values (revision %d) exported to %s", m.selectedRevision, path)}
+					}
+					return operationDoneMsg{success: fmt.Sprintf("Values exported to %s", path)}
+				}
+			}
 
 			chartName := m.charts[m.selectedChart].Name
 			if m.state == stateValueViewer && m.selectedVersion < len(m.versions) {
@@ -1734,6 +2275,19 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.versionList.SetItems(items)
 
+		case stateReleaseList:
+			matches := fuzzy.Find(query, releasesToStrings(m.releases))
+			items := make([]list.Item, len(matches))
+			for i, match := range matches {
+				release := m.releases[match.Index]
+				desc := fmt.Sprintf("%s | %s | %s", release.Namespace, release.Chart, release.Status)
+				items[i] = listItem{
+					title:       release.Name,
+					description: desc,
+				}
+			}
+			m.releaseList.SetItems(items)
+
 		case stateValueViewer:
 			// Find all matches in values
 			m.searchMatches = []int{}
@@ -1757,6 +2311,31 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					targetLine = 0
 				}
 				m.valuesView.YOffset = targetLine
+			}
+
+		case stateReleaseValues:
+			// Find all matches in release values
+			m.searchMatches = []int{}
+			m.lastSearchQuery = query
+			for i, line := range m.releaseValuesLines {
+				if strings.Contains(strings.ToLower(line), query) {
+					m.searchMatches = append(m.searchMatches, i)
+				}
+			}
+
+			// Update the view with highlighted search terms
+			m.updateReleaseValuesViewWithSearch()
+
+			// Jump to first match
+			if len(m.searchMatches) > 0 {
+				m.currentMatchIndex = 0
+				targetLine := m.searchMatches[0]
+				if targetLine > m.releaseValuesView.Height/2 {
+					targetLine = targetLine - m.releaseValuesView.Height/2
+				} else {
+					targetLine = 0
+				}
+				m.releaseValuesView.YOffset = targetLine
 			}
 
 		case stateDiffViewer:
@@ -1813,6 +2392,14 @@ func versionsToStrings(versions []helm.ChartVersion) []string {
 	return result
 }
 
+func releasesToStrings(releases []helm.Release) []string {
+	result := make([]string, len(releases))
+	for i, r := range releases {
+		result[i] = r.Name
+	}
+	return result
+}
+
 func (m model) jumpToMatch() model {
 	if len(m.searchMatches) == 0 {
 		return m
@@ -1826,6 +2413,12 @@ func (m model) jumpToMatch() model {
 			m.valuesView.YOffset = targetLine - m.valuesView.Height/2
 		} else {
 			m.valuesView.YOffset = 0
+		}
+	} else if m.state == stateReleaseValues {
+		if targetLine > m.releaseValuesView.Height/2 {
+			m.releaseValuesView.YOffset = targetLine - m.releaseValuesView.Height/2
+		} else {
+			m.releaseValuesView.YOffset = 0
 		}
 	} else if m.state == stateDiffViewer {
 		if targetLine > m.diffView.Height/2 {
@@ -1912,6 +2505,80 @@ func (m *model) updateValuesViewWithSearch() {
 	m.valuesView.SetContent(strings.Join(highlightedLines, "\n"))
 }
 
+func (m *model) updateReleaseValuesViewWithSearch() {
+	lines := strings.Split(m.releaseValues, "\n")
+	viewportWidth := m.releaseValuesView.Width
+	if viewportWidth <= 0 {
+		viewportWidth = m.termWidth - 6 // Default to full screen minus borders/padding
+	}
+
+	// Get the current match line (only this one should be highlighted)
+	var currentMatchLine int = -1
+	if len(m.searchMatches) > 0 && m.currentMatchIndex < len(m.searchMatches) {
+		currentMatchLine = m.searchMatches[m.currentMatchIndex]
+	}
+
+	query := strings.ToLower(m.lastSearchQuery)
+	highlightedLines := make([]string, len(lines))
+
+	for i, line := range lines {
+		// Apply horizontal scrolling
+		visibleLine := line
+		hasMore := false
+
+		// Calculate actual display width considering the line content
+		if len(line) > m.horizontalOffset {
+			visibleLine = line[m.horizontalOffset:]
+
+			// Truncate if longer than viewport width
+			if len(visibleLine) > viewportWidth-3 { // -3 for indicator
+				visibleLine = visibleLine[:viewportWidth-3]
+				hasMore = true
+			}
+		} else {
+			visibleLine = ""
+		}
+
+		// Apply syntax highlighting
+		var highlighted string
+		// Only highlight if this is THE CURRENT match (not all matches)
+		if i == currentMatchLine && query != "" {
+			// This line is the CURRENT match - find and highlight it
+			lowerLine := strings.ToLower(visibleLine)
+			idx := strings.Index(lowerLine, query)
+			if idx >= 0 && idx+len(query) <= len(visibleLine) {
+				// Split the line into 3 parts
+				before := visibleLine[:idx]
+				match := visibleLine[idx : idx+len(query)]
+				after := visibleLine[idx+len(query):]
+
+				// Apply YAML highlighting to before and after, but not to match
+				beforeHighlighted := ui.HighlightYAMLLine(before)
+				afterHighlighted := ui.HighlightYAMLLine(after)
+				matchHighlighted := highlightStyle.Render(match)
+
+				highlighted = beforeHighlighted + matchHighlighted + afterHighlighted
+			} else {
+				// Fallback to normal highlighting if match not found in visible portion
+				highlighted = ui.HighlightYAMLLine(visibleLine)
+			}
+		} else {
+			// Normal line - just apply YAML highlighting
+			highlighted = ui.HighlightYAMLLine(visibleLine)
+		}
+
+		// Add continuation indicator if line continues
+		if hasMore {
+			arrowStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Bold(true)
+			highlighted += arrowStyle.Render(" →")
+		}
+
+		highlightedLines[i] = highlighted
+	}
+
+	m.releaseValuesView.SetContent(strings.Join(highlightedLines, "\n"))
+}
+
 func (m *model) updateDiffViewWithSearch() {
 	if len(m.diffLines) == 0 {
 		return
@@ -1969,11 +2636,24 @@ func (m model) View() string {
 
 	breadcrumb := m.getBreadcrumb()
 	if breadcrumb != "" {
-		content += breadcrumbStyle.Render(" " + breadcrumb + " ") + "\n\n"
+		breadcrumbLine := breadcrumbStyle.Render(" " + breadcrumb + " ")
+
+		// Add kubectl context on the right if in cluster releases section
+		if ((m.state >= stateClusterReleasesMenu && m.state <= stateReleaseValues) ||
+			(m.state == stateDiffViewer && m.compareRevision >= 0)) && m.kubeContext != "" {
+			contextInfo := infoStyle.Render(fmt.Sprintf(" kubectl: %s ", m.kubeContext))
+			// Calculate spacing to push context to the right
+			breadcrumbWidth := len(breadcrumb) + 2
+			contextWidth := len(m.kubeContext) + 10
+			spacer := strings.Repeat(" ", max(1, m.termWidth-breadcrumbWidth-contextWidth-4))
+			breadcrumbLine = breadcrumbLine + spacer + contextInfo
+		}
+
+		content += breadcrumbLine + "\n\n"
 	}
 
 	// Show search info AFTER breadcrumb for better visibility
-	if (m.state == stateValueViewer || m.state == stateDiffViewer) && len(m.searchMatches) > 0 {
+	if (m.state == stateValueViewer || m.state == stateReleaseValues || m.state == stateDiffViewer) && len(m.searchMatches) > 0 {
 		content += m.renderSearchHeader() + "\n"
 	}
 
@@ -1998,6 +2678,18 @@ func (m model) View() string {
 		content += m.renderArtifactHubPackageDetail()
 	case stateArtifactHubVersions:
 		content += m.renderArtifactHubVersions()
+	case stateClusterReleasesMenu:
+		content += m.renderClusterReleasesMenu()
+	case stateNamespaceList:
+		content += m.renderNamespaceList()
+	case stateReleaseList:
+		content += m.renderReleaseList()
+	case stateReleaseDetail:
+		content += m.renderReleaseDetail()
+	case stateReleaseHistory:
+		content += m.renderReleaseHistory()
+	case stateReleaseValues:
+		content += m.renderReleaseValues()
 	}
 
 	footer := "\n"
@@ -2040,6 +2732,20 @@ func (m model) renderSearchHeader() string {
 			header += pathStyle.Render(fmt.Sprintf(" Line %d: %s ", matchLine+1, lineContent))
 		}
 		header += " " + helpStyle.Render("n=next N=prev y=copy")
+	} else if m.state == stateReleaseValues {
+		matchLine := m.searchMatches[m.currentMatchIndex]
+		yamlPath := ui.GetYAMLPath(m.releaseValuesLines, matchLine)
+
+		if yamlPath != "" {
+			header += pathStyle.Render(" " + yamlPath + " ")
+		} else if matchLine < len(m.releaseValuesLines) {
+			lineContent := strings.TrimSpace(m.releaseValuesLines[matchLine])
+			if len(lineContent) > 60 {
+				lineContent = lineContent[:60] + "..."
+			}
+			header += pathStyle.Render(fmt.Sprintf(" Line %d: %s ", matchLine+1, lineContent))
+		}
+		header += " " + helpStyle.Render("n=next N=prev y=copy")
 	} else if m.state == stateDiffViewer {
 		matchLine := m.searchMatches[m.currentMatchIndex]
 		if matchLine < len(m.diffLines) {
@@ -2057,6 +2763,36 @@ func (m model) renderSearchHeader() string {
 
 func (m model) getBreadcrumb() string {
 	parts := []string{"LazyHelm"}
+
+	// Cluster Releases navigation
+	if m.state >= stateClusterReleasesMenu && m.state <= stateReleaseValues {
+		parts = append(parts, "Cluster Releases")
+
+		if m.state == stateNamespaceList {
+			parts = append(parts, "Select Namespace")
+		}
+
+		if m.state >= stateReleaseList && m.selectedNamespace != "" {
+			parts = append(parts, m.selectedNamespace)
+		}
+
+		if m.state >= stateReleaseList && m.selectedRelease < len(m.releases) {
+			parts = append(parts, m.releases[m.selectedRelease].Name)
+		}
+
+		if m.state == stateReleaseHistory {
+			parts = append(parts, "history")
+		}
+
+		if m.state == stateReleaseValues {
+			if m.selectedRevision > 0 {
+				parts = append(parts, fmt.Sprintf("revision %d", m.selectedRevision))
+			}
+			parts = append(parts, "values")
+		}
+
+		return strings.Join(parts, " > ")
+	}
 
 	// Artifact Hub navigation
 	if m.state == stateArtifactHubSearch {
@@ -2093,6 +2829,10 @@ func (m model) getBreadcrumb() string {
 
 	if m.state == stateValueViewer {
 		parts = append(parts, "values")
+	}
+
+	if m.state == stateDiffViewer {
+		parts = append(parts, "diff")
 	}
 
 	return strings.Join(parts, " > ")
@@ -2171,7 +2911,19 @@ func (m model) renderDiffViewer() string {
 }
 
 func (m model) renderDiffContent(diffLines []ui.DiffLine, version1, version2 string) string {
-	header := fmt.Sprintf("Comparing v%s (old) → v%s (new)\n", version1, version2)
+	// Detect if we're comparing revisions (starts with "rev") or versions
+	var label1, label2 string
+	if len(version1) > 3 && version1[:3] == "rev" {
+		// Release revision
+		label1 = "Revision " + version1[3:]
+		label2 = "Revision " + version2[3:]
+	} else {
+		// Chart version
+		label1 = "v" + version1
+		label2 = "v" + version2
+	}
+
+	header := fmt.Sprintf("Comparing %s (old) → %s (new)\n", label1, label2)
 	header += fmt.Sprintf("Showing only changes (%d lines)\n\n", len(diffLines))
 
 	var content strings.Builder
@@ -2197,7 +2949,7 @@ func (m model) renderHelp() string {
 
 	help += "  Navigation:\n"
 	help += "    ↑/k, ↓/j    Move up/down\n"
-	help += "    ←/h, →/l    Scroll left/right (in values view)\n"
+	help += "    ←, →        Scroll left/right (in values view)\n"
 	help += "    enter       Select item / Go deeper\n"
 	help += "    esc         Go back to previous screen\n"
 	help += "    q           Quit application\n"
@@ -2219,12 +2971,18 @@ func (m model) renderHelp() string {
 	help += "    v           View all versions (in chart list)\n"
 	help += "    d           Diff two versions (select first, then second)\n\n"
 
+	help += "  Cluster Releases:\n"
+	help += "    v           View release values (in release list)\n"
+	help += "    h           View release history & revisions\n"
+	help += "    d           Diff two revisions (select first, then second)\n"
+	help += "    w           Export release values to file\n\n"
+
 	help += "  Values View:\n"
 	help += "    e           Edit values in external editor ($EDITOR)\n"
 	help += "    w           Write/export values to file\n"
 	help += "    t           Generate Helm template\n"
 	help += "    y           Copy YAML path to clipboard\n"
-	help += "    ←/→, h/l    Scroll horizontally for long lines\n\n"
+	help += "    ←/→         Scroll horizontally for long lines\n\n"
 
 	help += "  Tips:\n"
 	help += "    • Horizontal scroll: Lines ending with → continue beyond screen\n"
@@ -2406,6 +3164,194 @@ func (m model) renderArtifactHubVersions() string {
 
 	hint := "\n" + helpStyle.Render("  a: add repository to view values | esc: back  ")
 	return activePanelStyle.Render(m.ahVersionList.View()) + hint
+}
+
+func (m model) renderClusterReleasesMenu() string {
+	return activePanelStyle.Render(m.clusterReleasesMenu.View())
+}
+
+func (m model) renderNamespaceList() string {
+	if m.loading {
+		return "Loading namespaces..."
+	}
+	if len(m.namespaces) == 0 {
+		return "No namespaces with Helm releases found."
+	}
+	return activePanelStyle.Render(m.namespaceList.View())
+}
+
+func (m model) renderReleaseList() string {
+	if m.loading {
+		return "Loading releases..."
+	}
+	if len(m.releases) == 0 {
+		return "No releases found."
+	}
+
+	var header string
+	if m.selectedNamespace == "" {
+		header = infoStyle.Render(" Showing releases from all namespaces ") + "\n\n"
+	} else {
+		header = infoStyle.Render(fmt.Sprintf(" Namespace: %s ", m.selectedNamespace)) + "\n\n"
+	}
+
+	return header + activePanelStyle.Render(m.releaseList.View())
+}
+
+func (m *model) updateReleaseDetailView() {
+	if m.selectedRelease >= len(m.releases) {
+		return
+	}
+
+	release := m.releases[m.selectedRelease]
+	var content strings.Builder
+
+	// Release header
+	content.WriteString(infoStyle.Render(fmt.Sprintf(" Release: %s ", release.Name)) + "\n\n")
+
+	// Status section
+	if m.releaseStatus != nil {
+		content.WriteString("Status: " + m.releaseStatus.Status + "\n")
+		if m.releaseStatus.Description != "" {
+			content.WriteString("Description: " + m.releaseStatus.Description + "\n")
+		}
+		content.WriteString("\n")
+	}
+
+	// Release info
+	content.WriteString(fmt.Sprintf("Namespace:  %s\n", release.Namespace))
+	content.WriteString(fmt.Sprintf("Chart:      %s\n", release.Chart))
+	content.WriteString(fmt.Sprintf("App Version: %s\n", release.AppVersion))
+	content.WriteString(fmt.Sprintf("Updated:    %s\n", release.Updated))
+	content.WriteString("\n")
+
+	// History section
+	content.WriteString("Revision History:\n")
+	if len(m.releaseHistory) > 0 {
+		for _, rev := range m.releaseHistory {
+			revStr := fmt.Sprintf("  Revision %d - %s (%s) - %s\n",
+				rev.Revision, rev.Status, rev.Chart, rev.Updated)
+			content.WriteString(revStr)
+		}
+	} else {
+		content.WriteString("  Loading...\n")
+	}
+	content.WriteString("\n")
+
+	// Notes section
+	if m.releaseStatus != nil && m.releaseStatus.Notes != "" {
+		content.WriteString("Notes:\n")
+		// Indent each line of notes
+		noteLines := strings.Split(m.releaseStatus.Notes, "\n")
+		for _, line := range noteLines {
+			content.WriteString("  " + line + "\n")
+		}
+		content.WriteString("\n")
+	}
+
+	content.WriteString(helpStyle.Render("  v: view current values | h: interactive history | esc: back  "))
+
+	// Apply horizontal scrolling
+	lines := strings.Split(content.String(), "\n")
+	viewportWidth := m.releaseDetailView.Width
+	if viewportWidth <= 0 {
+		viewportWidth = m.termWidth - 6
+	}
+
+	scrolledLines := make([]string, len(lines))
+	for i, line := range lines {
+		visibleLine := line
+		hasMore := false
+
+		if len(line) > m.horizontalOffset {
+			visibleLine = line[m.horizontalOffset:]
+
+			if len(visibleLine) > viewportWidth-3 {
+				visibleLine = visibleLine[:viewportWidth-3]
+				hasMore = true
+			}
+		} else {
+			visibleLine = ""
+		}
+
+		if hasMore {
+			scrolledLines[i] = visibleLine + " →"
+		} else {
+			scrolledLines[i] = visibleLine
+		}
+	}
+
+	m.releaseDetailView.SetContent(strings.Join(scrolledLines, "\n"))
+}
+
+func (m model) renderReleaseDetail() string {
+	if m.loading {
+		return activePanelStyle.Render("Loading release details...")
+	}
+
+	if m.selectedRelease >= len(m.releases) {
+		return activePanelStyle.Render("No release selected.")
+	}
+
+	var header string
+	if m.horizontalOffset > 0 {
+		scrollInfo := fmt.Sprintf(" ← Scrolled %d chars | use ←/→ to scroll ", m.horizontalOffset)
+		header = helpStyle.Render(scrollInfo) + "\n\n"
+	}
+
+	if header != "" {
+		return header + activePanelStyle.Render(m.releaseDetailView.View())
+	}
+
+	return activePanelStyle.Render(m.releaseDetailView.View())
+}
+
+func (m model) renderReleaseHistory() string {
+	if m.loading {
+		return activePanelStyle.Render("Loading revision history...")
+	}
+	if len(m.releaseHistory) == 0 {
+		return activePanelStyle.Render("No revision history found.")
+	}
+
+	if m.diffMode {
+		selectedRevision := "unknown"
+		if m.compareRevision < len(m.releaseHistory) {
+			selectedRevision = fmt.Sprintf("Revision %d", m.releaseHistory[m.compareRevision].Revision)
+		}
+		diffMsg := fmt.Sprintf(" Diff mode: First revision = %s | Select second revision to compare ", selectedRevision)
+		return infoStyle.Render(diffMsg) + "\n\n" + activePanelStyle.Render(m.releaseHistoryList.View())
+	}
+
+	hint := "\n" + helpStyle.Render("  Select a revision to view its values | esc: back  ")
+	return activePanelStyle.Render(m.releaseHistoryList.View()) + hint
+}
+
+func (m model) renderReleaseValues() string {
+	if m.loadingVals {
+		return activePanelStyle.Render("Loading values...")
+	}
+	if m.releaseValues == "" {
+		return activePanelStyle.Render("No values available.")
+	}
+
+	var header string
+	// Show which revision we're viewing
+	if m.selectedRevision > 0 {
+		header = infoStyle.Render(fmt.Sprintf(" Revision %d Values ", m.selectedRevision)) + "\n\n"
+	}
+
+	// Show horizontal scroll indicator if scrolled
+	if m.horizontalOffset > 0 {
+		scrollInfo := fmt.Sprintf(" ← Scrolled %d chars | use ←/→ or h/l to scroll ", m.horizontalOffset)
+		header += helpStyle.Render(scrollInfo) + "\n\n"
+	}
+
+	if header != "" {
+		return header + activePanelStyle.Render(m.releaseValuesView.View())
+	}
+
+	return activePanelStyle.Render(m.releaseValuesView.View())
 }
 
 func main() {

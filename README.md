@@ -163,6 +163,7 @@ Reads from your existing Helm config (`~/.config/helm/repositories.yaml`) and ca
 - kubectl configured with valid context (optional, for Cluster Releases feature)
 - Go 1.21+ (if building from source)
 - Terminal with ANSI color support
+- kubectl configured with valid context (optional, for Cluster Releases feature)
 
 ## Development
 
