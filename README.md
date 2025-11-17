@@ -10,15 +10,34 @@ A terminal UI for browsing and managing Helm charts. Inspired by lazygit and laz
 
 ## What it does
 
-Browse Helm repos, explore chart versions, view and edit values files, and compare versions - all in your terminal. No need to remember helm commands or manually fetch values.
+LazyHelm brings an intuitive, lazygit-style interface to Helm chart management:
+
+- **Navigate with ease** - Organized menu system to browse local repositories or search Artifact Hub
+- **Explore charts** - Browse your configured Helm repos and discover all available charts
+- **Search globally** - Find charts across Artifact Hub directly from the terminal
+- **Manage repositories** - Add, remove, and update repository indexes with simple keystrokes
+- **View & compare** - Inspect chart values with syntax highlighting and diff between versions
+- **Edit efficiently** - Modify values in your preferred editor ($EDITOR) with YAML validation
+- **Search & filter** - Fuzzy search through repositories, charts, and values
+- **Copy & export** - Copy YAML paths to clipboard or export values to files
+- **Preview templates** - Generate Helm templates to see what will be deployed
+- **Cluster integration** - View deployed releases, explore revision history, and inspect values from any revision
+
+All in your terminal. No need to remember helm commands or manually fetch values.
 
 ## Features
 
-- **Intuitive menu system** - Main menu with organized sections for browsing and future cluster management
+- **Intuitive menu system** - Main menu with organized sections for browsing and cluster management
 - Interactive browsing of Helm repositories and charts
 - Search and browse Artifact Hub directly from the UI
 - Add repositories from Artifact Hub with package info and security reports
 - **Update repository indexes** - Keep your local chart indexes up to date with `helm repo update`
+- **Cluster Releases** - View and manage deployed Helm releases in your Kubernetes cluster:
+  - Browse releases across all namespaces or filter by specific namespace
+  - View release details: status, chart version, app version, namespace
+  - Interactive revision history with full details for each deployment
+  - Inspect values used in any revision (current or historical)
+  - Automatically uses your current kubectl context
 - Syntax-highlighted YAML viewing
 - Edit values in your preferred editor (nvim/vim/vi/etc)
 - Compare values between versions with diff view
@@ -77,7 +96,9 @@ Main Menu
 ├── Browse Repositories
 │   ├── Local Repositories - Browse your configured Helm repos
 │   └── Search Artifact Hub - Search charts on Artifact Hub
-├── Cluster Releases (Coming Soon) - Manage deployed releases
+├── Cluster Releases - View and manage deployed Helm releases
+│   ├── All Namespaces - View releases across all namespaces
+│   └── Select Namespace - Choose a specific namespace to browse
 └── Settings (Coming Soon) - Configure LazyHelm
 ```
 
@@ -107,6 +128,11 @@ Main Menu
 - `v` - View all versions (in chart list)
 - `d` - Diff two versions (select first, then second)
 
+### Cluster Releases
+- `v` - View current release values (in release detail)
+- `h` - Open interactive revision history (in release detail)
+- `enter` - Select revision to view its values (in history list)
+
 ### Values View
 - `e` - Edit values in external editor ($EDITOR)
 - `w` - Write/export values to file
@@ -125,6 +151,7 @@ Reads from your existing Helm config (`~/.config/helm/repositories.yaml`) and ca
 - Helm 3.x installed
 - Go 1.21+ (if building from source)
 - Terminal with ANSI color support
+- kubectl configured with valid context (optional, for Cluster Releases feature)
 
 ## Development
 
@@ -139,7 +166,7 @@ go build -o lazyhelm ./cmd/lazyhelm
 ## TODO
 
 - Helm operations (install/upgrade/uninstall)
-- Show deployed releases from K8s (Cluster Releases menu)
+- Diff between release revisions
 - Config file
 - Bookmarks
 
