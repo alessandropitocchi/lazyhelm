@@ -163,6 +163,7 @@ type model struct {
 	chartCache   map[string]chartCacheEntry
 	versionCache map[string]versionCacheEntry
 	state        navigationState
+	previousState navigationState
 	mode         inputMode
 
 	repos        []helm.Repository
@@ -805,6 +806,7 @@ func initialModel() model {
 		state:             stateMainMenu,
 		mode:              normalMode,
 		repos:             repos,
+		compareRevision:   -1,
 		artifactHubClient:     artifacthub.NewClient(),
 		ahPackageList:         ahPackageList,
 		ahVersionList:         ahVersionList,
@@ -874,7 +876,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.state == stateHelp {
 			if msg.String() == "?" || msg.String() == "esc" || msg.String() == "q" {
-				m.state = stateRepoList
+				m.state = m.previousState
 			}
 			return m, nil
 		}
@@ -888,6 +890,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keys.Help):
+			m.previousState = m.state
 			m.state = stateHelp
 			return m, nil
 
@@ -1578,9 +1581,9 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.valuesLines = nil
 	case stateDiffViewer:
 		// Return to release history if we were comparing revisions, otherwise chart detail
-		if m.compareRevision > 0 {
+		if m.compareRevision >= 0 {
 			m.state = stateReleaseHistory
-			m.compareRevision = 0
+			m.compareRevision = -1
 		} else {
 			m.state = stateChartDetail
 		}
@@ -2599,7 +2602,20 @@ func (m model) View() string {
 
 	breadcrumb := m.getBreadcrumb()
 	if breadcrumb != "" {
-		content += breadcrumbStyle.Render(" " + breadcrumb + " ") + "\n\n"
+		breadcrumbLine := breadcrumbStyle.Render(" " + breadcrumb + " ")
+
+		// Add kubectl context on the right if in cluster releases section
+		if ((m.state >= stateClusterReleasesMenu && m.state <= stateReleaseValues) ||
+			(m.state == stateDiffViewer && m.compareRevision >= 0)) && m.kubeContext != "" {
+			contextInfo := infoStyle.Render(fmt.Sprintf(" kubectl: %s ", m.kubeContext))
+			// Calculate spacing to push context to the right
+			breadcrumbWidth := len(breadcrumb) + 2
+			contextWidth := len(m.kubeContext) + 10
+			spacer := strings.Repeat(" ", max(1, m.termWidth-breadcrumbWidth-contextWidth-4))
+			breadcrumbLine = breadcrumbLine + spacer + contextInfo
+		}
+
+		content += breadcrumbLine + "\n\n"
 	}
 
 	// Show search info AFTER breadcrumb for better visibility
@@ -2782,13 +2798,7 @@ func (m model) getBreadcrumb() string {
 	}
 
 	if m.state == stateDiffViewer {
-		if m.compareRevision > 0 && m.selectedRelease < len(m.releases) {
-			// We're comparing release revisions
-			parts = append(parts, "diff")
-		} else {
-			// We're comparing chart versions
-			parts = append(parts, "diff")
-		}
+		parts = append(parts, "diff")
 	}
 
 	return strings.Join(parts, " > ")
@@ -3123,12 +3133,7 @@ func (m model) renderArtifactHubVersions() string {
 }
 
 func (m model) renderClusterReleasesMenu() string {
-	var header string
-	if m.kubeContext != "" {
-		contextInfo := fmt.Sprintf(" Kubectl Context: %s ", m.kubeContext)
-		header = infoStyle.Render(contextInfo) + "\n\n"
-	}
-	return header + activePanelStyle.Render(m.clusterReleasesMenu.View())
+	return activePanelStyle.Render(m.clusterReleasesMenu.View())
 }
 
 func (m model) renderNamespaceList() string {
@@ -3226,6 +3231,15 @@ func (m model) renderReleaseHistory() string {
 	}
 	if len(m.releaseHistory) == 0 {
 		return activePanelStyle.Render("No revision history found.")
+	}
+
+	if m.diffMode {
+		selectedRevision := "unknown"
+		if m.compareRevision < len(m.releaseHistory) {
+			selectedRevision = fmt.Sprintf("Revision %d", m.releaseHistory[m.compareRevision].Revision)
+		}
+		diffMsg := fmt.Sprintf(" Diff mode: First revision = %s | Select second revision to compare ", selectedRevision)
+		return infoStyle.Render(diffMsg) + "\n\n" + activePanelStyle.Render(m.releaseHistoryList.View())
 	}
 
 	hint := "\n" + helpStyle.Render("  Select a revision to view its values | esc: back  ")
