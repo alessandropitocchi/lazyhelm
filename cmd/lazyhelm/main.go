@@ -950,7 +950,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Export):
-			if m.state == stateChartDetail || m.state == stateValueViewer {
+			if m.state == stateChartDetail || m.state == stateValueViewer || m.state == stateReleaseValues {
 				m.mode = exportValuesMode
 				m.searchInput.Reset()
 				m.searchInput.Placeholder = "./values.yaml"
@@ -2018,6 +2018,19 @@ func (m model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.mode = normalMode
 			m.searchInput.Blur()
+
+			if m.state == stateReleaseValues {
+				return m, func() tea.Msg {
+					err := os.WriteFile(path, []byte(m.releaseValues), 0644)
+					if err != nil {
+						return operationDoneMsg{err: err}
+					}
+					if m.selectedRevision > 0 {
+						return operationDoneMsg{success: fmt.Sprintf("Values (revision %d) exported to %s", m.selectedRevision, path)}
+					}
+					return operationDoneMsg{success: fmt.Sprintf("Values exported to %s", path)}
+				}
+			}
 
 			chartName := m.charts[m.selectedChart].Name
 			if m.state == stateValueViewer && m.selectedVersion < len(m.versions) {
