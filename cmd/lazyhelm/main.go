@@ -199,6 +199,7 @@ type model struct {
 	namespaces         []string
 	selectedRelease    int
 	selectedRevision   int
+	compareRevision    int
 	selectedNamespace  string
 	releaseHistory     []helm.ReleaseRevision
 	releaseValues      string
@@ -1133,6 +1134,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == stateChartDetail && len(m.versions) > 1 {
 				m.diffMode = true
 				m.compareVersion = m.versionList.Index()
+			} else if m.state == stateReleaseHistory && len(m.releaseHistory) > 1 {
+				m.diffMode = true
+				m.compareRevision = m.releaseHistoryList.Index()
 			}
 			return m, nil
 
@@ -1573,7 +1577,13 @@ func (m model) handleBack() (tea.Model, tea.Cmd) {
 		m.values = ""
 		m.valuesLines = nil
 	case stateDiffViewer:
-		m.state = stateChartDetail
+		// Return to release history if we were comparing revisions, otherwise chart detail
+		if m.compareRevision > 0 {
+			m.state = stateReleaseHistory
+			m.compareRevision = 0
+		} else {
+			m.state = stateChartDetail
+		}
 	case stateArtifactHubSearch:
 		m.state = stateBrowseMenu
 		m.ahPackages = nil
@@ -1711,20 +1721,64 @@ func (m model) handleEnter() (tea.Model, tea.Cmd) {
 		if selectedItem != nil && m.selectedRelease < len(m.releases) {
 			item := selectedItem.(listItem)
 			release := m.releases[m.selectedRelease]
-			// Find the revision by matching the title "Revision X"
-			for _, rev := range m.releaseHistory {
+
+			// Find the selected revision index
+			var selectedIdx int = -1
+			for i, rev := range m.releaseHistory {
 				revTitle := fmt.Sprintf("Revision %d", rev.Revision)
 				if revTitle == item.title {
-					m.selectedRevision = rev.Revision
-					m.state = stateReleaseValues
-					m.loadingVals = true
-					return m, func() tea.Msg {
-						values, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, rev.Revision)
-						if err != nil {
-							return releaseValuesLoadedMsg{err: err}
-						}
-						return releaseValuesLoadedMsg{values: values}
+					selectedIdx = i
+					break
+				}
+			}
+
+			if selectedIdx >= 0 {
+				if m.diffMode {
+					if selectedIdx == m.compareRevision {
+						return m, m.setSuccessMsg("Please select a different revision to compare")
 					}
+
+					revision1 := m.releaseHistory[m.compareRevision].Revision
+					revision2 := m.releaseHistory[selectedIdx].Revision
+
+					// Get values for both revisions
+					values1, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, revision1)
+					if err != nil {
+						m.err = err
+						m.diffMode = false
+						return m, nil
+					}
+
+					values2, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, revision2)
+					if err != nil {
+						m.err = err
+						m.diffMode = false
+						return m, nil
+					}
+
+					diffLines := ui.DiffYAML(values1, values2)
+					diffContent := m.renderDiffContent(diffLines, fmt.Sprintf("rev%d", revision1), fmt.Sprintf("rev%d", revision2))
+
+					// Save diff lines for search functionality
+					m.diffLines = strings.Split(diffContent, "\n")
+
+					m.diffView.SetContent(diffContent)
+					m.state = stateDiffViewer
+					m.diffMode = false
+					return m, nil
+				}
+
+				// Normal flow: view values for selected revision
+				rev := m.releaseHistory[selectedIdx]
+				m.selectedRevision = rev.Revision
+				m.state = stateReleaseValues
+				m.loadingVals = true
+				return m, func() tea.Msg {
+					values, err := m.helmClient.GetReleaseValuesByRevision(release.Name, release.Namespace, rev.Revision)
+					if err != nil {
+						return releaseValuesLoadedMsg{err: err}
+					}
+					return releaseValuesLoadedMsg{values: values}
 				}
 			}
 		}
@@ -2727,6 +2781,16 @@ func (m model) getBreadcrumb() string {
 		parts = append(parts, "values")
 	}
 
+	if m.state == stateDiffViewer {
+		if m.compareRevision > 0 && m.selectedRelease < len(m.releases) {
+			// We're comparing release revisions
+			parts = append(parts, "diff")
+		} else {
+			// We're comparing chart versions
+			parts = append(parts, "diff")
+		}
+	}
+
 	return strings.Join(parts, " > ")
 }
 
@@ -2803,7 +2867,19 @@ func (m model) renderDiffViewer() string {
 }
 
 func (m model) renderDiffContent(diffLines []ui.DiffLine, version1, version2 string) string {
-	header := fmt.Sprintf("Comparing v%s (old) → v%s (new)\n", version1, version2)
+	// Detect if we're comparing revisions (starts with "rev") or versions
+	var label1, label2 string
+	if len(version1) > 3 && version1[:3] == "rev" {
+		// Release revision
+		label1 = "Revision " + version1[3:]
+		label2 = "Revision " + version2[3:]
+	} else {
+		// Chart version
+		label1 = "v" + version1
+		label2 = "v" + version2
+	}
+
+	header := fmt.Sprintf("Comparing %s (old) → %s (new)\n", label1, label2)
 	header += fmt.Sprintf("Showing only changes (%d lines)\n\n", len(diffLines))
 
 	var content strings.Builder
